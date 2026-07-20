@@ -1,6 +1,6 @@
 {
   "name": "@smallthinkingmachines/video-context-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Model-agnostic MCP server that turns videos into an interactive, queryable knowledge structure — transcript, keyframes, OCR, and search that any MCP client can scrub lazily",
   "type": "module",
   "main": "dist/index.js",

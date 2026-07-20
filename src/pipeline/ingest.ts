@@ -5,9 +5,12 @@ import type { Config } from '../config.js';
 import { VcmError } from '../errors.js';
 import type { VideoRef } from '../ids.js';
 import { resolveRef } from '../ids.js';
+import { extractFrames } from './frames.js';
+import { classifyFrame, ocrFrame } from './ocr.js';
 import { mergeCues, parseVtt } from './vtt.js';
 import {
   downloadCaptions,
+  downloadVideo,
   fetchYoutubeMetadata,
   pickCaptionTrack,
   probeLocalFile,
@@ -16,6 +19,8 @@ import {
 export interface IngestOptions {
   whisperFallback?: boolean;
   force?: boolean;
+  /** Download the video and index keyframes+OCR (default true). */
+  visual?: boolean;
 }
 
 export interface StartResult {
@@ -61,6 +66,7 @@ export class IngestManager {
       // force / retry: wipe derived rows so re-ingest starts clean.
       this.db.prepare('DELETE FROM segments WHERE video_id = ?').run(ref.id);
       this.db.prepare('DELETE FROM chapters WHERE video_id = ?').run(ref.id);
+      this.db.prepare('DELETE FROM frames WHERE video_id = ?').run(ref.id);
       this.db
         .prepare(
           `INSERT INTO videos (id, kind, source_url, stage, opts_json)
@@ -77,7 +83,7 @@ export class IngestManager {
         .run(ref.id, now);
     })();
 
-    const job = this.withSlot(() => this.run(ref)).finally(() => this.running.delete(ref.id));
+    const job = this.withSlot(() => this.run(ref, opts)).finally(() => this.running.delete(ref.id));
     this.running.set(ref.id, job);
     return { videoId: ref.id, stage: 'pending', cached: false, alreadyRunning: false };
   }
@@ -109,13 +115,18 @@ export class IngestManager {
   private setStage(videoId: string, stage: string, pct: number): void {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE videos SET stage = ? WHERE id = ?').run(stage, videoId);
-    this.db
-      .prepare('UPDATE jobs SET stage = ?, progress_pct = ?, updated_at = ? WHERE video_id = ?')
-      .run(stage, pct, now, videoId);
+    this.setProgress(videoId, stage, pct);
   }
 
-  private async run(ref: VideoRef): Promise<void> {
-    const workDir = join(this.config.cacheDir, ref.id, 'tmp');
+  private setProgress(videoId: string, stage: string, pct: number): void {
+    this.db
+      .prepare('UPDATE jobs SET stage = ?, progress_pct = ?, updated_at = ? WHERE video_id = ?')
+      .run(stage, pct, new Date().toISOString(), videoId);
+  }
+
+  private async run(ref: VideoRef, opts: IngestOptions): Promise<void> {
+    const videoDir = join(this.config.cacheDir, ref.id);
+    const workDir = join(videoDir, 'tmp');
     try {
       this.setStage(ref.id, 'metadata', 5);
       let captionsVtt: string | null = null;
@@ -133,7 +144,7 @@ export class IngestManager {
           for (const ch of meta.chapters) insertChapter.run(ref.id, ch.startMs, ch.title);
         })();
 
-        this.setStage(ref.id, 'transcript', 40);
+        this.setStage(ref.id, 'transcript', 25);
         captionTrack = pickCaptionTrack(meta);
         if (captionTrack) {
           mkdirSync(workDir, { recursive: true });
@@ -144,7 +155,7 @@ export class IngestManager {
         this.db
           .prepare('UPDATE videos SET title = ?, duration_s = ? WHERE id = ?')
           .run(basename(ref.source), probe.durationS, ref.id);
-        this.setStage(ref.id, 'transcript', 40);
+        this.setStage(ref.id, 'transcript', 25);
         // Local files have no caption track; whisper fallback lands in Phase 3.
       }
 
@@ -161,27 +172,72 @@ export class IngestManager {
           .run(captionTrack!.lang, captionTrack!.auto ? 1 : 0, ref.id);
       }
 
+      // Visual stage failures downgrade to a warning: transcript stays usable.
+      let visualError: VcmError | null = null;
+      if (opts.visual !== false) {
+        try {
+          await this.runVisual(ref, videoDir, workDir);
+        } catch (err) {
+          visualError =
+            err instanceof VcmError
+              ? err
+              : new VcmError('VISUAL_FAILED', err instanceof Error ? err.message : String(err));
+        }
+      }
+
       const now = new Date().toISOString();
       this.db
-        .prepare("UPDATE videos SET stage = 'done', ingested_at = ? WHERE id = ?")
-        .run(now, ref.id);
-      this.db
         .prepare(
-          "UPDATE jobs SET stage = 'done', progress_pct = 100, updated_at = ? WHERE video_id = ?",
+          "UPDATE videos SET stage = 'done', ingested_at = ?, error_code = ?, error_detail = ? WHERE id = ?",
         )
-        .run(now, ref.id);
+        .run(now, visualError?.code ?? null, visualError?.message ?? null, ref.id);
+      this.setProgress(ref.id, 'done', 100);
     } catch (err) {
       const code = err instanceof VcmError ? err.code : 'YTDLP_FAILED';
       const detail = err instanceof Error ? err.message : String(err);
       this.db
         .prepare("UPDATE videos SET stage = 'error', error_code = ?, error_detail = ? WHERE id = ?")
         .run(code, detail, ref.id);
-      const now = new Date().toISOString();
-      this.db
-        .prepare("UPDATE jobs SET stage = 'error', updated_at = ? WHERE video_id = ?")
-        .run(now, ref.id);
+      this.setProgress(ref.id, 'error', 0);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
+    }
+  }
+
+  /** frames stage (download + scene-detect keyframes) then ocr stage. */
+  private async runVisual(ref: VideoRef, videoDir: string, workDir: string): Promise<void> {
+    this.setStage(ref.id, 'frames', 45);
+    let videoPath: string;
+    if (ref.kind === 'youtube') {
+      mkdirSync(workDir, { recursive: true });
+      videoPath = await downloadVideo(ref, workDir, this.config);
+    } else {
+      videoPath = ref.source; // never deleted — the user's own file
+    }
+
+    const frames = await extractFrames(videoPath, videoDir, this.config);
+    if (ref.kind === 'youtube') rmSync(videoPath, { force: true }); // source media gone ASAP
+
+    this.setStage(ref.id, 'ocr', 65);
+    const insertFrame = this.db.prepare(
+      'INSERT INTO frames (video_id, ts_ms, path, width, height, class) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    const insertBlock = this.db.prepare(
+      'INSERT INTO ocr_blocks (frame_id, text, bbox_json, conf) VALUES (?, ?, ?, ?)',
+    );
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i]!;
+      const blocks = await ocrFrame(frame.path, this.config);
+      const cls = classifyFrame(blocks);
+      this.db.transaction(() => {
+        const res = insertFrame.run(ref.id, frame.tsMs, frame.path, frame.width, frame.height, cls);
+        for (const b of blocks) {
+          insertBlock.run(res.lastInsertRowid, b.text, JSON.stringify(b.bbox), b.conf);
+        }
+      })();
+      if (i % 5 === 4) {
+        this.setProgress(ref.id, 'ocr', 65 + Math.round((30 * (i + 1)) / frames.length));
+      }
     }
   }
 }

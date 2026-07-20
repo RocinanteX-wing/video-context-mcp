@@ -120,6 +120,38 @@ export async function downloadCaptions(
   }
 }
 
+/**
+ * Download the video stream (capped height, no audio needed) for frame
+ * extraction. Returns the downloaded file path inside workDir; the caller
+ * deletes it as soon as frames are extracted.
+ */
+export async function downloadVideo(
+  ref: VideoRef,
+  workDir: string,
+  config: Config,
+): Promise<string> {
+  const h = config.maxVideoHeight;
+  await runYtdlp(
+    [
+      '-f',
+      `bestvideo[height<=${h}]/best[height<=${h}]/best`,
+      '--no-warnings',
+      '--no-playlist',
+      '-P',
+      workDir,
+      '-o',
+      'video.%(ext)s',
+      ref.source,
+    ],
+    config,
+  );
+  const file = readdirSync(workDir).find((f) => f.startsWith('video.'));
+  if (!file) {
+    throw new VcmError('VISUAL_FAILED', 'yt-dlp reported success but produced no video file.');
+  }
+  return join(workDir, file);
+}
+
 /** Duration (and little else) for local files, via ffprobe. */
 export async function probeLocalFile(
   absPath: string,

@@ -41,12 +41,14 @@ describe('MCP server over stdio', () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      'crop_region',
       'delete_video',
       'get_ingest_status',
       'get_transcript',
       'get_video_timeline',
       'ingest_video',
       'list_videos',
+      'peek_frame',
       'search_videos',
     ]);
   });

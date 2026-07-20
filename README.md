@@ -8,7 +8,8 @@ Most video tools for agents either lock you to one model provider or eagerly dum
 
 - Node ≥ 20
 - [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on PATH (YouTube ingestion)
-- `ffmpeg`/`ffprobe` on PATH (local files; keyframes in Phase 2)
+- `ffmpeg`/`ffprobe` on PATH (keyframe extraction, local files)
+- `tesseract` on PATH (on-screen text OCR; visual indexing degrades gracefully without it)
 
 ## Install & register
 
@@ -41,7 +42,9 @@ command = "video-context-mcp"
 | `get_ingest_status` | Stage, progress, what's queryable, actionable errors |
 | `get_video_timeline` | Compact overview: chapters + sampled transcript outline |
 | `get_transcript` | Timestamped transcript, sliceable by range |
-| `search_videos` | Full-text search across all ingested videos |
+| `search_videos` | Full-text search over speech AND on-screen text (OCR) |
+| `peek_frame` | The keyframe image nearest a timestamp + its OCR text — *you* look at it |
+| `crop_region` | Zoom into a bbox of a frame (IDE panel, diagram) for dense text |
 | `list_videos` / `delete_video` | Cache inventory and cleanup |
 
 Typical agent flow: `ingest_video` → poll `get_ingest_status` → `get_video_timeline` → `search_videos("the thing I care about")` → `get_transcript(hit ± 30s)`.
@@ -52,8 +55,8 @@ All optional (see `.env.example`): `VCM_CACHE_DIR` (default `~/.cache/video-cont
 
 ## Roadmap
 
-- **Phase 1 (this release):** metadata + captions transcript + timeline + FTS search
-- **Phase 2:** keyframes (ffmpeg scene detection), `peek_frame` / `crop_region` returning images the *client* model interprets (stays model-agnostic), tesseract OCR into search
+- **Phase 1 (shipped):** metadata + captions transcript + timeline + FTS search
+- **Phase 2 (this release):** keyframes (ffmpeg scene detection), `peek_frame` / `crop_region` returning images the *client* model interprets (stays model-agnostic), tesseract OCR into search. Known limitation: YouTube's SABR streaming experiment can cap downloads at 360p, degrading code OCR — surfaced as a note in `get_ingest_status`.
 - **Phase 3:** local whisper fallback for caption-less videos
 - **Phase 4:** hybrid dense+lexical search across your video library
 - **Phase 5 (experimental):** on-screen code diff reconstruction, diagram→Mermaid, deictic alignment

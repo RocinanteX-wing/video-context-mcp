@@ -28,10 +28,35 @@ describe('db', () => {
   }
 
   it('migrates a fresh database and is idempotent on reopen', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(1);
+    expect(db.pragma('user_version', { simple: true })).toBe(2);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
-    expect(db.pragma('user_version', { simple: true })).toBe(1);
+    expect(db.pragma('user_version', { simple: true })).toBe(2);
+  });
+
+  it('ocr_fts follows ocr_blocks inserts and cascade deletes (v2)', () => {
+    insertVideo('vid00000003');
+    const frameId = db
+      .prepare(
+        "INSERT INTO frames (video_id, ts_ms, path, width, height, class) VALUES ('vid00000003', 5000, '/x/f.jpg', 1280, 720, 'code')",
+      )
+      .run().lastInsertRowid;
+    db.prepare('INSERT INTO ocr_blocks (frame_id, text, bbox_json, conf) VALUES (?, ?, ?, 90)').run(
+      frameId,
+      'const server = express()',
+      '[0,0,100,20]',
+    );
+    const hit = db
+      .prepare(
+        'SELECT f.ts_ms FROM ocr_fts JOIN ocr_blocks b ON b.id = ocr_fts.rowid JOIN frames f ON f.id = b.frame_id WHERE ocr_fts MATCH ?',
+      )
+      .get('express') as { ts_ms: number } | undefined;
+    expect(hit?.ts_ms).toBe(5000);
+
+    db.prepare('DELETE FROM videos WHERE id = ?').run('vid00000003'); // cascades frames → ocr_blocks
+    expect(
+      db.prepare('SELECT rowid FROM ocr_fts WHERE ocr_fts MATCH ?').all('express'),
+    ).toHaveLength(0);
   });
 
   it('FTS index follows segment inserts and deletes', () => {

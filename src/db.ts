@@ -96,12 +96,37 @@ export function openDb(cacheDir: string): Database.Database {
   return db;
 }
 
+const SCHEMA_V2 = `
+CREATE VIRTUAL TABLE ocr_fts USING fts5(
+  text,
+  content='ocr_blocks',
+  content_rowid='id',
+  tokenize='porter unicode61'
+);
+CREATE TRIGGER ocr_ai AFTER INSERT ON ocr_blocks BEGIN
+  INSERT INTO ocr_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER ocr_ad AFTER DELETE ON ocr_blocks BEGIN
+  INSERT INTO ocr_fts(ocr_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER ocr_au AFTER UPDATE ON ocr_blocks BEGIN
+  INSERT INTO ocr_fts(ocr_fts, rowid, text) VALUES ('delete', old.id, old.text);
+  INSERT INTO ocr_fts(rowid, text) VALUES (new.id, new.text);
+END;
+`;
+
 function migrate(db: Database.Database): void {
   const version = db.pragma('user_version', { simple: true }) as number;
   if (version < 1) {
     db.transaction(() => {
       db.exec(SCHEMA_V1);
       db.pragma('user_version = 1');
+    })();
+  }
+  if (version < 2) {
+    db.transaction(() => {
+      db.exec(SCHEMA_V2);
+      db.pragma('user_version = 2');
     })();
   }
 }

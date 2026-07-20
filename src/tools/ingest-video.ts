@@ -20,14 +20,27 @@ export const inputSchema = {
       'Reserved: transcribe with local whisper when the video has no captions (not yet implemented)',
     ),
   force: z.boolean().optional().describe('Re-ingest even if the video is already indexed'),
+  visual: z
+    .boolean()
+    .optional()
+    .describe(
+      'Download the video and index keyframes+OCR for peek_frame/crop_region and screen-text ' +
+        'search (default true; adds minutes for long videos). Set false for fast transcript-only ingest.',
+    ),
 };
 
 export function handler(deps: Deps) {
-  return async (args: { url_or_path: string; whisper_fallback?: boolean; force?: boolean }) => {
+  return async (args: {
+    url_or_path: string;
+    whisper_fallback?: boolean;
+    force?: boolean;
+    visual?: boolean;
+  }) => {
     try {
       const res = deps.ingest.start(args.url_or_path, {
         whisperFallback: args.whisper_fallback,
         force: args.force,
+        visual: args.visual,
       });
       return jsonResult({
         video_id: res.videoId,

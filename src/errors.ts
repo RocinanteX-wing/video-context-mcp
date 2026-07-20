@@ -19,6 +19,7 @@ export type ErrorCode =
   | 'BINARY_MISSING'
   | 'INGEST_INTERRUPTED'
   | 'NETWORK'
+  | 'VISUAL_FAILED'
   | 'YTDLP_FAILED';
 
 export class VcmError extends Error {

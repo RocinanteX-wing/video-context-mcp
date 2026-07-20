@@ -60,6 +60,58 @@ export function requireDone(row: VideoRow, ingest: IngestManager): void {
   );
 }
 
+export interface FrameRow {
+  id: number;
+  video_id: string;
+  ts_ms: number;
+  path: string;
+  width: number;
+  height: number;
+  class: string | null;
+}
+
+/** Nearest indexed keyframe to a timestamp; throws with guidance if none exist. */
+export function nearestFrame(db: Database.Database, videoId: string, tsMs: number): FrameRow {
+  const frame = db
+    .prepare('SELECT * FROM frames WHERE video_id = ? ORDER BY ABS(ts_ms - ?) LIMIT 1')
+    .get(videoId, tsMs) as FrameRow | undefined;
+  if (!frame) {
+    throw new VcmError(
+      'STAGE_NOT_READY',
+      `No keyframes indexed for ${videoId}. Visual indexing may have been skipped (visual=false), failed (check get_ingest_status), or is still running. Re-ingest with force=true to retry.`,
+    );
+  }
+  return frame;
+}
+
+/** OCR blocks of a frame with bboxes normalized to 0..1 of the frame. */
+export function frameOcrBlocks(
+  db: Database.Database,
+  frame: FrameRow,
+): { text: string; bbox: [number, number, number, number]; conf: number }[] {
+  const rows = db
+    .prepare('SELECT text, bbox_json, conf FROM ocr_blocks WHERE frame_id = ? ORDER BY id')
+    .all(frame.id) as { text: string; bbox_json: string | null; conf: number }[];
+  return rows.map((r) => {
+    const px = (r.bbox_json ? JSON.parse(r.bbox_json) : [0, 0, 0, 0]) as number[];
+    const n = (v: number, d: number) => Math.round((v / d) * 1000) / 1000;
+    return {
+      text: r.text,
+      bbox: [
+        n(px[0] ?? 0, frame.width),
+        n(px[1] ?? 0, frame.height),
+        n(px[2] ?? 0, frame.width),
+        n(px[3] ?? 0, frame.height),
+      ] as [number, number, number, number],
+      conf: r.conf,
+    };
+  });
+}
+
+export function imageContent(base64: string): { type: 'image'; data: string; mimeType: string } {
+  return { type: 'image', data: base64, mimeType: 'image/jpeg' };
+}
+
 export function segmentCount(db: Database.Database, videoId: string): number {
   const r = db.prepare('SELECT COUNT(*) AS n FROM segments WHERE video_id = ?').get(videoId) as {
     n: number;

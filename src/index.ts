@@ -11,12 +11,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { loadConfig } from './config.js';
 import { markInterruptedJobs, openDb } from './db.js';
 import { IngestManager } from './pipeline/ingest.js';
+import * as cropRegion from './tools/crop-region.js';
 import * as deleteVideo from './tools/delete-video.js';
 import * as getIngestStatus from './tools/get-ingest-status.js';
 import * as getTranscript from './tools/get-transcript.js';
 import * as getVideoTimeline from './tools/get-video-timeline.js';
 import * as ingestVideo from './tools/ingest-video.js';
 import * as listVideos from './tools/list-videos.js';
+import * as peekFrame from './tools/peek-frame.js';
 import * as searchVideos from './tools/search-videos.js';
 import type { Deps } from './tools/shared.js';
 import { SERVER_NAME, VERSION } from './version.js';
@@ -34,8 +36,9 @@ Usage: video-context-mcp            start the MCP server on stdio
        video-context-mcp --version  print version
 
 Environment: VCM_CACHE_DIR, YTDLP_COOKIES_FILE, VCM_MAX_CACHE_GB,
-             VCM_YTDLP_BIN, VCM_FFMPEG_BIN, VCM_FFPROBE_BIN
-Requires yt-dlp (and ffmpeg for local files) on PATH.
+             VCM_YTDLP_BIN, VCM_FFMPEG_BIN, VCM_FFPROBE_BIN, VCM_TESSERACT_BIN,
+             VCM_MAX_VIDEO_HEIGHT, VCM_SCENE_THRESHOLD, VCM_MIN_FRAME_GAP_S, VCM_MAX_FRAMES
+Requires yt-dlp on PATH; ffmpeg + tesseract for visual indexing.
 
 Register in an MCP client config, e.g.:
   { "mcpServers": { "video-context": { "command": "video-context-mcp" } } }`,
@@ -51,6 +54,8 @@ export function buildServer(deps: Deps): McpServer {
     getVideoTimeline,
     getTranscript,
     searchVideos,
+    peekFrame,
+    cropRegion,
     listVideos,
     deleteVideo,
   ]) {

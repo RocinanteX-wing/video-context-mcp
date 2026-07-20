@@ -30,14 +30,25 @@ export function handler(deps: Deps) {
         .prepare('SELECT start_ms, end_ms, text FROM segments WHERE video_id = ? ORDER BY start_ms')
         .all(row.id) as { start_ms: number; end_ms: number; text: string }[];
 
+      const frameClasses = deps.db
+        .prepare(
+          'SELECT class, COUNT(*) AS n FROM frames WHERE video_id = ? GROUP BY class ORDER BY n DESC',
+        )
+        .all(row.id) as { class: string | null; n: number }[];
+
       const lines: string[] = [];
       const dur = row.duration_s ? formatMs(row.duration_s * 1000) : '?';
       const caps = row.captions_lang
         ? `captions: ${row.captions_lang}${row.captions_auto ? ' (auto)' : ''}`
         : 'no captions';
+      const totalFrames = frameClasses.reduce((s, c) => s + c.n, 0);
+      const framesDesc =
+        totalFrames > 0
+          ? `${totalFrames} keyframes (${frameClasses.map((c) => `${c.n} ${c.class ?? '?'}`).join(', ')})`
+          : 'no keyframes';
       lines.push(
         `# ${row.title ?? row.id}${row.channel ? ` — ${row.channel}` : ''}`,
-        `video_id: ${row.id} · duration: ${dur} · ${caps} · ${segments.length} transcript segments`,
+        `video_id: ${row.id} · duration: ${dur} · ${caps} · ${segments.length} transcript segments · ${framesDesc}`,
         '',
       );
 
@@ -60,7 +71,10 @@ export function handler(deps: Deps) {
             nextBucketStart = seg.start_ms + bucketMs;
           }
         }
-        lines.push('', 'Use get_transcript(video_id, start, end) for full text of any range.');
+        lines.push(
+          '',
+          `Use get_transcript(video_id, start, end) for full text of any range${totalFrames > 0 ? ', peek_frame(video_id, timestamp) to see the screen.' : '.'}`,
+        );
       } else {
         lines.push('No transcript available for this video (no captions).');
       }
