@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { toToolError } from '../errors.js';
+import { VcmError, toToolError } from '../errors.js';
 import { type Deps, getVideoRow, jsonResult } from './shared.js';
 
 export const name = 'delete_video';
@@ -18,8 +18,17 @@ export function handler(deps: Deps) {
   return async (args: { video_id: string }) => {
     try {
       const row = getVideoRow(deps.db, args.video_id);
+      // Filesystem first: if this fails, the row survives and the call can be
+      // retried — the reverse order would strand an unmanageable orphan dir.
+      try {
+        rmSync(join(deps.config.cacheDir, row.id), { recursive: true, force: true });
+      } catch (err) {
+        throw new VcmError(
+          'STAGE_NOT_READY',
+          `Could not delete cached files for ${row.id} (${err instanceof Error ? err.message.slice(0, 200) : err}). The index entry was kept — fix permissions and retry.`,
+        );
+      }
       deps.db.prepare('DELETE FROM videos WHERE id = ?').run(row.id);
-      rmSync(join(deps.config.cacheDir, row.id), { recursive: true, force: true });
       return jsonResult({ deleted: row.id, title: row.title });
     } catch (err) {
       return toToolError(err);

@@ -8,6 +8,10 @@ import type { VideoRef } from '../ids.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_BUFFER = 64 * 1024 * 1024;
+const METADATA_TIMEOUT_MS = 3 * 60_000;
+const AUDIO_TIMEOUT_MS = 15 * 60_000;
+const VIDEO_TIMEOUT_MS = 30 * 60_000;
+const PROBE_TIMEOUT_MS = 60_000;
 
 export interface ChapterInfo {
   startMs: number;
@@ -28,20 +32,34 @@ export interface VideoMetadata {
   autoCaptionLangs: string[];
 }
 
-async function runYtdlp(args: string[], config: Config): Promise<string> {
+async function runYtdlp(args: string[], config: Config, timeoutMs: number): Promise<string> {
   const fullArgs = [...args];
   if (config.cookiesFile) fullArgs.unshift('--cookies', config.cookiesFile);
   try {
-    const { stdout } = await execFileAsync(config.ytdlpBin, fullArgs, { maxBuffer: MAX_BUFFER });
+    const { stdout } = await execFileAsync(config.ytdlpBin, fullArgs, {
+      maxBuffer: MAX_BUFFER,
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
+    });
     return stdout;
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stderr?: string };
+    const e = err as NodeJS.ErrnoException & { stderr?: string; killed?: boolean };
+    if (e.killed) {
+      throw new VcmError(
+        'NETWORK',
+        `yt-dlp timed out after ${Math.round(timeoutMs / 60000)} min and was killed. Check connectivity and retry.`,
+      );
+    }
     throw classifyYtdlpFailure(e.stderr ?? e.message ?? '', Boolean(config.cookiesFile), e);
   }
 }
 
 export async function fetchYoutubeMetadata(ref: VideoRef, config: Config): Promise<VideoMetadata> {
-  const stdout = await runYtdlp(['-J', '--no-warnings', '--skip-download', ref.source], config);
+  const stdout = await runYtdlp(
+    ['-J', '--no-warnings', '--skip-download', ref.source],
+    config,
+    METADATA_TIMEOUT_MS,
+  );
   let info: Record<string, unknown>;
   try {
     info = JSON.parse(stdout) as Record<string, unknown>;
@@ -105,6 +123,7 @@ export async function downloadCaptions(
       ref.source,
     ],
     config,
+    METADATA_TIMEOUT_MS,
   );
   const expected = join(workDir, `${ref.id}.${track.lang}.vtt`);
   try {
@@ -144,6 +163,7 @@ export async function downloadVideo(
       ref.source,
     ],
     config,
+    VIDEO_TIMEOUT_MS,
   );
   const file = readdirSync(workDir).find((f) => f.startsWith('video.'));
   if (!file) {
@@ -171,6 +191,7 @@ export async function downloadAudio(
       ref.source,
     ],
     config,
+    AUDIO_TIMEOUT_MS,
   );
   const file = readdirSync(workDir).find((f) => f.startsWith('audio.'));
   if (!file) {
@@ -188,19 +209,24 @@ export async function probeLocalFile(
     const { stdout } = await execFileAsync(
       config.ffprobeBin,
       ['-v', 'error', '-print_format', 'json', '-show_format', absPath],
-      { maxBuffer: MAX_BUFFER },
+      { maxBuffer: MAX_BUFFER, timeout: PROBE_TIMEOUT_MS, killSignal: 'SIGKILL' },
     );
     const info = JSON.parse(stdout) as { format?: { duration?: string } };
     const d = info.format?.duration ? Number(info.format.duration) : null;
     return { durationS: d && Number.isFinite(d) ? d : null };
   } catch (err) {
-    const e = err as NodeJS.ErrnoException;
+    const e = err as NodeJS.ErrnoException & { stderr?: string };
     if (e.code === 'ENOENT') {
       throw new VcmError(
         'BINARY_MISSING',
         'ffprobe was not found on PATH. Install ffmpeg or set VCM_FFPROBE_BIN.',
       );
     }
-    throw new VcmError('YTDLP_FAILED', `ffprobe failed on ${absPath}: ${e.message}`);
+    // Bounded, not the raw Node error (which embeds the full command line).
+    const tail = (e.stderr ?? '').trim().split('\n').slice(-2).join(' | ').slice(0, 200);
+    throw new VcmError(
+      'YTDLP_FAILED',
+      `ffprobe could not read this file (unsupported or corrupt media?)${tail ? `: ${tail}` : '.'}`,
+    );
   }
 }

@@ -54,6 +54,34 @@ describe('parseVtt', () => {
   it('returns empty for caption-less vtt', () => {
     expect(parseVtt('WEBVTT\n\n')).toEqual([]);
   });
+
+  it('preserves genuinely repeated speech separated by a gap', () => {
+    const vtt = `WEBVTT
+
+00:00:01.000 --> 00:00:02.000
+Repeat after me.
+
+00:10:01.000 --> 00:10:02.000
+Repeat after me.
+`;
+    const cues = parseVtt(vtt);
+    expect(cues).toHaveLength(2);
+    expect(cues[1]!.text).toBe('Repeat after me.');
+  });
+
+  it('still dedups identical lines in temporally contiguous rolling cues', () => {
+    const vtt = `WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+rolling line
+
+00:00:03.000 --> 00:00:05.000
+rolling line
+new line
+`;
+    const cues = parseVtt(vtt);
+    expect(cues.map((c) => c.text)).toEqual(['rolling line', 'new line']);
+  });
 });
 
 describe('mergeCues', () => {

@@ -42,10 +42,8 @@ export function handler(deps: Deps) {
         segments: number;
       }[];
 
-      let totalBytes = 0;
       const videos = rows.map((r) => {
         const bytes = dirSizeBytes(join(deps.config.cacheDir, r.id));
-        totalBytes += bytes;
         return {
           video_id: r.id,
           title: r.title,
@@ -58,7 +56,9 @@ export function handler(deps: Deps) {
         };
       });
 
-      const totalGb = totalBytes / 1024 ** 3;
+      // Whole-cache size: includes video dirs, whisper models, the SQLite
+      // index, and any orphans — not just directories with live rows.
+      const totalGb = dirSizeBytes(deps.config.cacheDir) / 1024 ** 3;
       return jsonResult({
         count: videos.length,
         cache_dir: deps.config.cacheDir,

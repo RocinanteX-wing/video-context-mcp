@@ -44,20 +44,31 @@ export function getVideoRow(db: Database.Database, videoId: string): VideoRow {
   return row;
 }
 
-/** Gate tools that need a finished ingest; explains how to proceed otherwise. */
-export function requireDone(row: VideoRow, ingest: IngestManager): void {
-  if (row.stage === 'done') return;
+const DETAIL_MAX = 300;
+
+/**
+ * Ingest-state note for partial or stale results, or null when the video is
+ * fully ingested with no warnings. Tools serve whatever data exists and
+ * append this so the agent knows what it is looking at — a mid-ingest video's
+ * transcript is usable the moment its rows land, without waiting for frames.
+ */
+export function ingestStateNote(row: VideoRow, ingest: IngestManager): string | null {
+  const detail = (row.error_detail ?? 'unknown').slice(0, DETAIL_MAX);
+  if (row.stage === 'done') {
+    return row.error_code ? `Note: ingest completed with warnings: ${detail}` : null;
+  }
   if (row.stage === 'error') {
-    throw new VcmError(
-      'STAGE_NOT_READY',
-      `Ingest of ${row.id} failed [${row.error_code}]: ${row.error_detail ?? 'unknown'}. Fix the cause and re-run ingest_video with force=true.`,
-    );
+    return `Note: the last ingest FAILED [${row.error_code}]: ${detail}. Any data shown is from an earlier successful ingest. Re-run ingest_video with force=true.`;
   }
   const running = ingest.isRunning(row.id);
-  throw new VcmError(
-    'STAGE_NOT_READY',
-    `Video ${row.id} is still ingesting (stage=${row.stage}${running ? '' : ', stalled'}). Poll get_ingest_status and retry when stage=done.`,
-  );
+  return `Note: ingest in progress (stage=${row.stage}${running ? '' : ' — stalled; re-run ingest_video with force=true'}); results may be partial.`;
+}
+
+export function segmentCount(db: Database.Database, videoId: string): number {
+  const r = db.prepare('SELECT COUNT(*) AS n FROM segments WHERE video_id = ?').get(videoId) as {
+    n: number;
+  };
+  return r.n;
 }
 
 export interface FrameRow {
@@ -110,11 +121,4 @@ export function frameOcrBlocks(
 
 export function imageContent(base64: string): { type: 'image'; data: string; mimeType: string } {
   return { type: 'image', data: base64, mimeType: 'image/jpeg' };
-}
-
-export function segmentCount(db: Database.Database, videoId: string): number {
-  const r = db.prepare('SELECT COUNT(*) AS n FROM segments WHERE video_id = ?').get(videoId) as {
-    n: number;
-  };
-  return r.n;
 }

@@ -15,20 +15,26 @@ const YT_URL_RE =
   /(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/|live\/|v\/)|youtu\.be\/)([\w-]{11})/;
 const YT_ID_RE = /^[\w-]{11}$/;
 
+const HASH_CHUNK = 8 * 1024 * 1024;
+
 /**
- * Content-address a local file: sha256 over (size + first 8 MiB). Full-file
- * hashing would be exact but too slow for multi-GB videos; size+head is
- * collision-safe enough for a personal cache.
+ * Content-address a local file: sha256 over (size + first 8 MiB + last 8 MiB).
+ * Full-file hashing would be exact but too slow for multi-GB videos; head+tail
+ * +size catches files that share a container header but differ in content.
  */
-function hashLocalFile(absPath: string): string {
-  const st = statSync(absPath);
+function hashLocalFile(absPath: string, size: number): string {
   const hash = createHash('sha256');
-  hash.update(String(st.size));
+  hash.update(String(size));
   const fd = openSync(absPath, 'r');
   try {
-    const buf = Buffer.alloc(8 * 1024 * 1024);
-    const n = readSync(fd, buf, 0, buf.length, 0);
-    hash.update(buf.subarray(0, n));
+    const buf = Buffer.alloc(HASH_CHUNK);
+    const head = readSync(fd, buf, 0, buf.length, 0);
+    hash.update(buf.subarray(0, head));
+    if (size > HASH_CHUNK) {
+      const tailPos = Math.max(HASH_CHUNK, size - HASH_CHUNK);
+      const tail = readSync(fd, buf, 0, buf.length, tailPos);
+      hash.update(buf.subarray(0, tail));
+    }
   } finally {
     closeSync(fd);
   }
@@ -54,7 +60,21 @@ export function resolveRef(input: string): VideoRef {
     if (!existsSync(abs)) {
       throw new VcmError('FILE_NOT_FOUND', `Local file not found: ${abs}`);
     }
-    return { id: hashLocalFile(abs), kind: 'local', source: abs };
+    try {
+      const st = statSync(abs);
+      // Regular files only: directories error uselessly and FIFOs would block
+      // the event loop during hashing.
+      if (!st.isFile()) {
+        throw new VcmError('FILE_NOT_FOUND', `Not a regular file: ${abs}`);
+      }
+      return { id: hashLocalFile(abs, st.size), kind: 'local', source: abs };
+    } catch (err) {
+      if (err instanceof VcmError) throw err;
+      throw new VcmError(
+        'FILE_NOT_FOUND',
+        `Cannot read local file ${abs}: ${err instanceof Error ? err.message.slice(0, 200) : err}`,
+      );
+    }
   }
 
   if (YT_ID_RE.test(trimmed)) {

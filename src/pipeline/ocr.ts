@@ -91,7 +91,7 @@ export async function ocrFrame(imagePath: string, config: Config): Promise<OcrBl
     const { stdout } = await execFileAsync(
       config.tesseractBin,
       [imagePath, 'stdout', '--psm', '3', 'tsv'],
-      { maxBuffer: MAX_BUFFER },
+      { maxBuffer: MAX_BUFFER, timeout: 120_000, killSignal: 'SIGKILL' },
     );
     return parseTsv(stdout);
   } catch (err) {

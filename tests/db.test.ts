@@ -28,10 +28,38 @@ describe('db', () => {
   }
 
   it('migrates a fresh database and is idempotent on reopen', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(2);
+    expect(db.pragma('user_version', { simple: true })).toBe(3);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
-    expect(db.pragma('user_version', { simple: true })).toBe(2);
+    expect(db.pragma('user_version', { simple: true })).toBe(3);
+  });
+
+  it('FTS rebuild makes pre-trigger rows searchable (migration v3 mechanism)', () => {
+    insertVideo('vidRebuild01');
+    const frameId = db
+      .prepare(
+        "INSERT INTO frames (video_id, ts_ms, path, width, height) VALUES ('vidRebuild01', 0, '/x/f.jpg', 100, 100)",
+      )
+      .run().lastInsertRowid;
+    db.prepare(
+      "INSERT INTO ocr_blocks (frame_id, text, conf) VALUES (?, 'searchable words', 90)",
+    ).run(frameId);
+    // Simulate a row that predates the FTS triggers by deleting its index entry.
+    const blockId = (
+      db.prepare('SELECT id FROM ocr_blocks WHERE frame_id = ?').get(frameId) as {
+        id: number;
+      }
+    ).id;
+    db.prepare(
+      "INSERT INTO ocr_fts(ocr_fts, rowid, text) VALUES ('delete', ?, 'searchable words')",
+    ).run(blockId);
+    expect(
+      db.prepare('SELECT rowid FROM ocr_fts WHERE ocr_fts MATCH ?').all('searchable'),
+    ).toHaveLength(0);
+    db.exec("INSERT INTO ocr_fts(ocr_fts) VALUES('rebuild')");
+    expect(
+      db.prepare('SELECT rowid FROM ocr_fts WHERE ocr_fts MATCH ?').all('searchable'),
+    ).toHaveLength(1);
   });
 
   it('ocr_fts follows ocr_blocks inserts and cascade deletes (v2)', () => {

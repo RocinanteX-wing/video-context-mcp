@@ -1,7 +1,12 @@
 /**
  * Keyframe extraction: ffmpeg scene-change detection with showinfo timestamp
- * parsing, a minimum-gap rate cap, and ≤1280px JPEG storage named by
- * millisecond timestamp (frames/000012345.jpg).
+ * parsing, a dedicated opening-frame pass (scene detection only fires on
+ * *changes*, so t=0 needs its own capture), a minimum-gap rate cap, and
+ * ≤1280px JPEG storage named by millisecond timestamp.
+ *
+ * Extraction is generational: frames are written to `frames.staging/` and the
+ * live `frames/` directory is swapped in only after extraction succeeds, so a
+ * failed re-ingest never destroys the previous keyframes.
  */
 import { execFile } from 'node:child_process';
 import { mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
@@ -13,6 +18,8 @@ import { VcmError } from '../errors.js';
 const execFileAsync = promisify(execFile);
 const MAX_BUFFER = 64 * 1024 * 1024;
 const STORE_WIDTH = 1280;
+const EXTRACT_TIMEOUT_MS = 30 * 60_000;
+const IMAGE_OP_TIMEOUT_MS = 60_000;
 
 export interface ExtractedFrame {
   tsMs: number;
@@ -68,16 +75,26 @@ export function filterByGap<T extends { tsMs: number }>(
   return kept;
 }
 
-async function runFfmpeg(args: string[], config: Config): Promise<string> {
+async function runFfmpeg(args: string[], config: Config, timeoutMs: number): Promise<string> {
   try {
-    const { stderr } = await execFileAsync(config.ffmpegBin, args, { maxBuffer: MAX_BUFFER });
+    const { stderr } = await execFileAsync(config.ffmpegBin, args, {
+      maxBuffer: MAX_BUFFER,
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
+    });
     return stderr;
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stderr?: string };
+    const e = err as NodeJS.ErrnoException & { stderr?: string; killed?: boolean };
     if (e.code === 'ENOENT') {
       throw new VcmError(
         'BINARY_MISSING',
         'ffmpeg was not found on PATH. Install ffmpeg or set VCM_FFMPEG_BIN.',
+      );
+    }
+    if (e.killed) {
+      throw new VcmError(
+        'VISUAL_FAILED',
+        `ffmpeg timed out after ${Math.round(timeoutMs / 60000)} min and was killed.`,
       );
     }
     const tail = (e.stderr ?? e.message ?? '')
@@ -90,12 +107,21 @@ async function runFfmpeg(args: string[], config: Config): Promise<string> {
   }
 }
 
+interface RawFrame {
+  tsMs: number;
+  width: number;
+  height: number;
+  rawPath: string;
+}
+
 async function extractPass(
   videoPath: string,
   outDir: string,
   vf: string,
+  prefix: string,
+  maxOutputFrames: number,
   config: Config,
-): Promise<ShowinfoFrame[]> {
+): Promise<RawFrame[]> {
   const args = [
     '-hide_banner',
     '-nostats',
@@ -105,12 +131,17 @@ async function extractPass(
     vf,
     '-fps_mode',
     'vfr',
+    // Bound ffmpeg itself: without this, a fast-cut long video can write an
+    // unbounded number of JPEGs before the post-hoc gap filter ever runs.
+    '-frames:v',
+    String(maxOutputFrames),
     '-q:v',
     '4',
-    join(outDir, 'raw-%06d.jpg'),
+    join(outDir, `${prefix}-%06d.jpg`),
   ];
+  let stderr: string;
   try {
-    return parseShowinfo(await runFfmpeg(args, config));
+    stderr = await runFfmpeg(args, config, EXTRACT_TIMEOUT_MS);
   } catch (err) {
     // ffmpeg exits non-zero when a select filter matches no frames at all —
     // "Output file is empty, nothing was encoded" (≤v7) or "Nothing was
@@ -124,12 +155,19 @@ async function extractPass(
     }
     throw err;
   }
+  // Output files <prefix>-000001.jpg… are 1-indexed in showinfo order (n: 0-based).
+  return parseShowinfo(stderr).map((f) => ({
+    tsMs: f.tsMs,
+    width: f.width,
+    height: f.height,
+    rawPath: join(outDir, `${prefix}-${String(f.index + 1).padStart(6, '0')}.jpg`),
+  }));
 }
 
 /**
- * Extract keyframes from a video file into `<videoDir>/frames/`.
- * Scene-change detection first; if the video is too static to trigger any
- * scene cuts, falls back to one frame per 60s.
+ * Extract keyframes from a video file into `<videoDir>/frames/` (via a staging
+ * dir swapped in on success). Always captures the opening frame; scene-change
+ * detection covers the rest; falls back to interval sampling for static video.
  */
 export async function extractFrames(
   videoPath: string,
@@ -138,42 +176,64 @@ export async function extractFrames(
   durationS?: number | null,
 ): Promise<ExtractedFrame[]> {
   const framesDir = join(videoDir, 'frames');
-  rmSync(framesDir, { recursive: true, force: true });
-  mkdirSync(framesDir, { recursive: true });
+  const stagingDir = join(videoDir, 'frames.staging');
+  rmSync(stagingDir, { recursive: true, force: true });
+  mkdirSync(stagingDir, { recursive: true });
 
   const scale = `scale='min(${STORE_WIDTH},iw)':-2`;
-  let info = await extractPass(
+
+  // Opening frame: scene detection only fires on changes, so t=0 is captured
+  // explicitly — otherwise peek_frame(0) would return the first *cut* instead.
+  const first = await extractPass(videoPath, stagingDir, `${scale},showinfo`, 'zero', 1, config);
+
+  let scene = await extractPass(
     videoPath,
-    framesDir,
+    stagingDir,
     `select='gt(scene,${config.sceneThreshold})',${scale},showinfo`,
+    'scene',
+    config.maxFrames * 3,
     config,
   );
 
-  if (info.length === 0) {
+  if (scene.length === 0) {
     // Static video (single slide, fixed camera): sample on an interval instead.
     // ffmpeg 8's fps filter emits nothing for videos shorter than the period,
     // so clamp the interval to half the duration when we know it.
     const interval =
       durationS && durationS > 0 ? Math.max(1, Math.min(60, Math.floor(durationS / 2))) : 60;
-    for (const f of readdirSync(framesDir)) rmSync(join(framesDir, f), { force: true });
-    info = await extractPass(videoPath, framesDir, `fps=1/${interval},${scale},showinfo`, config);
+    scene = await extractPass(
+      videoPath,
+      stagingDir,
+      `fps=1/${interval},${scale},showinfo`,
+      'iv',
+      config.maxFrames * 3,
+      config,
+    );
   }
 
-  const kept = filterByGap(info, config.minFrameGapS * 1000, config.maxFrames);
-  const keptIndices = new Set(kept.map((f) => f.index));
+  const all = [...first, ...scene].sort((a, b) => a.tsMs - b.tsMs);
+  const kept = filterByGap(all, config.minFrameGapS * 1000, config.maxFrames);
+  const keptPaths = new Set<string>();
 
-  // Output files raw-000001.jpg… are 1-indexed in showinfo order (n: 0-based).
   const results: ExtractedFrame[] = [];
-  for (const f of info) {
-    const rawPath = join(framesDir, `raw-${String(f.index + 1).padStart(6, '0')}.jpg`);
-    if (keptIndices.has(f.index)) {
-      const finalPath = join(framesDir, `${String(f.tsMs).padStart(9, '0')}.jpg`);
-      renameSync(rawPath, finalPath);
-      results.push({ tsMs: f.tsMs, path: finalPath, width: f.width, height: f.height });
-    } else {
-      rmSync(rawPath, { force: true });
-    }
+  for (const f of kept) {
+    const finalName = `${String(f.tsMs).padStart(9, '0')}.jpg`;
+    renameSync(f.rawPath, join(stagingDir, finalName));
+    keptPaths.add(finalName);
+    results.push({
+      tsMs: f.tsMs,
+      width: f.width,
+      height: f.height,
+      path: join(framesDir, finalName),
+    });
   }
+  for (const file of readdirSync(stagingDir)) {
+    if (!keptPaths.has(file)) rmSync(join(stagingDir, file), { force: true });
+  }
+
+  // Swap the new generation in only now that it is complete.
+  rmSync(framesDir, { recursive: true, force: true });
+  renameSync(stagingDir, framesDir);
   return results;
 }
 
@@ -198,6 +258,7 @@ export async function reencodeFrame(
       destPath,
     ],
     config,
+    IMAGE_OP_TIMEOUT_MS,
   );
 }
 
@@ -229,5 +290,6 @@ export async function cropFrame(
       destPath,
     ],
     config,
+    IMAGE_OP_TIMEOUT_MS,
   );
 }

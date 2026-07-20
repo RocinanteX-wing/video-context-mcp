@@ -5,7 +5,15 @@
  */
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -17,6 +25,12 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_MODEL = 'ggml-base.en.bin';
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${DEFAULT_MODEL}`;
+const MODEL_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+/** base.en is ~148 MB; anything tiny is an error page, not a model. */
+const MODEL_MIN_BYTES = 10 * 1024 * 1024;
+const WAV_TIMEOUT_MS = 10 * 60_000;
+const WHISPER_TIMEOUT_MS = 4 * 60 * 60_000;
+let downloadCounter = 0;
 
 export type ProgressFn = (pct: number, note?: string) => void;
 
@@ -47,9 +61,10 @@ export async function ensureWhisperModel(config: Config, onProgress?: ProgressFn
 
   onProgress?.(0, `downloading whisper model ${DEFAULT_MODEL} (~148 MB, one-time)`);
   mkdirSync(dirname(dest), { recursive: true });
-  const tmp = `${dest}.download`;
+  // Unique temp name: two concurrent first-use jobs must not race on one file.
+  const tmp = `${dest}.download.${process.pid}.${++downloadCounter}`;
   try {
-    const res = await fetch(MODEL_URL);
+    const res = await fetch(MODEL_URL, { signal: AbortSignal.timeout(MODEL_DOWNLOAD_TIMEOUT_MS) });
     if (!res.ok || !res.body) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -57,9 +72,19 @@ export async function ensureWhisperModel(config: Config, onProgress?: ProgressFn
       Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]),
       createWriteStream(tmp),
     );
+    if (statSync(tmp).size < MODEL_MIN_BYTES) {
+      throw new Error('downloaded file is far too small to be a whisper model');
+    }
+    if (existsSync(dest)) {
+      // Another concurrent job won the race; use its copy.
+      rmSync(tmp, { force: true });
+      return dest;
+    }
     renameSync(tmp, dest);
     return dest;
   } catch (err) {
+    rmSync(tmp, { force: true });
+    if (existsSync(dest)) return dest; // a concurrent job completed the download
     throw new VcmError(
       'NETWORK',
       `Failed to download the whisper model (${err instanceof Error ? err.message : err}). ` +
@@ -88,15 +113,18 @@ export async function toWav16k(mediaPath: string, wavPath: string, config: Confi
         'pcm_s16le',
         wavPath,
       ],
-      { maxBuffer: 16 * 1024 * 1024 },
+      { maxBuffer: 16 * 1024 * 1024, timeout: WAV_TIMEOUT_MS, killSignal: 'SIGKILL' },
     );
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stderr?: string };
+    const e = err as NodeJS.ErrnoException & { stderr?: string; killed?: boolean };
     if (e.code === 'ENOENT') {
       throw new VcmError(
         'BINARY_MISSING',
         'ffmpeg was not found on PATH. Install ffmpeg or set VCM_FFMPEG_BIN.',
       );
+    }
+    if (e.killed) {
+      throw new VcmError('ASR_FAILED', 'ffmpeg audio extraction timed out and was killed.');
     }
     const tail = (e.stderr ?? e.message ?? '')
       .trim()
@@ -120,6 +148,11 @@ function runWhisperCli(
 
   return new Promise((resolve, reject) => {
     const child = spawn(config.whisperBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let timedOut = false;
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, WHISPER_TIMEOUT_MS);
     let tail = '';
     const onData = (chunk: Buffer) => {
       const s = chunk.toString();
@@ -132,6 +165,7 @@ function runWhisperCli(
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
     child.on('error', (err: NodeJS.ErrnoException) => {
+      clearTimeout(killTimer);
       reject(
         err.code === 'ENOENT'
           ? new VcmError(
@@ -142,7 +176,15 @@ function runWhisperCli(
       );
     });
     child.on('close', (code) => {
-      if (code === 0) resolve();
+      clearTimeout(killTimer);
+      if (timedOut) {
+        reject(
+          new VcmError(
+            'ASR_FAILED',
+            `whisper-cli exceeded the ${WHISPER_TIMEOUT_MS / 3_600_000}h limit and was killed.`,
+          ),
+        );
+      } else if (code === 0) resolve();
       else {
         const last = tail.trim().split('\n').slice(-2).join(' | ').slice(0, 300);
         reject(new VcmError('ASR_FAILED', `whisper-cli exited with code ${code}: ${last}`));

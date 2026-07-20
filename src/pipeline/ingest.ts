@@ -34,6 +34,15 @@ export interface StartResult {
 
 const MAX_CONCURRENT = 2;
 
+/** Best-effort removal that never throws (cache cleanup must not crash jobs). */
+function safeRm(path: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch (err) {
+    console.error(`[video-context-mcp] cleanup of ${path} failed:`, err);
+  }
+}
+
 export class IngestManager {
   private running = new Map<string, Promise<void>>();
   private active = 0;
@@ -44,7 +53,13 @@ export class IngestManager {
     private config: Config,
   ) {}
 
-  /** Resolve the ref, register the job, and kick the pipeline (not awaited). */
+  /**
+   * Resolve the ref, register the job, and kick the pipeline (not awaited).
+   * Re-ingest is GENERATIONAL: existing derived rows (segments, chapters,
+   * frames) are never deleted here — each pipeline stage atomically swaps in
+   * its replacement only once the new data is ready, so a failed re-ingest
+   * cannot destroy the last good index.
+   */
   start(input: string, opts: IngestOptions = {}): StartResult {
     const ref = resolveRef(input);
     const row = this.db.prepare('SELECT stage FROM videos WHERE id = ?').get(ref.id) as
@@ -64,28 +79,30 @@ export class IngestManager {
     }
 
     const now = new Date().toISOString();
-    this.db.transaction(() => {
-      // force / retry: wipe derived rows so re-ingest starts clean.
-      this.db.prepare('DELETE FROM segments WHERE video_id = ?').run(ref.id);
-      this.db.prepare('DELETE FROM chapters WHERE video_id = ?').run(ref.id);
-      this.db.prepare('DELETE FROM frames WHERE video_id = ?').run(ref.id);
-      this.db
-        .prepare(
-          `INSERT INTO videos (id, kind, source_url, stage, opts_json)
-           VALUES (?, ?, ?, 'pending', ?)
-           ON CONFLICT(id) DO UPDATE SET
-             stage = 'pending', error_code = NULL, error_detail = NULL, opts_json = excluded.opts_json`,
-        )
-        .run(ref.id, ref.kind, ref.source, JSON.stringify(opts));
-      this.db
-        .prepare(
-          `INSERT INTO jobs (video_id, stage, progress_pct, updated_at) VALUES (?, 'pending', 0, ?)
-           ON CONFLICT(video_id) DO UPDATE SET stage = 'pending', progress_pct = 0, updated_at = excluded.updated_at`,
-        )
-        .run(ref.id, now);
-    })();
+    this.db
+      .prepare(
+        `INSERT INTO videos (id, kind, source_url, stage, opts_json)
+         VALUES (?, ?, ?, 'pending', ?)
+         ON CONFLICT(id) DO UPDATE SET
+           stage = 'pending', error_code = NULL, error_detail = NULL,
+           kind = excluded.kind, source_url = excluded.source_url,
+           opts_json = excluded.opts_json`,
+      )
+      .run(ref.id, ref.kind, ref.source, JSON.stringify(opts));
+    this.db
+      .prepare(
+        `INSERT INTO jobs (video_id, stage, progress_pct, updated_at) VALUES (?, 'pending', 0, ?)
+         ON CONFLICT(video_id) DO UPDATE SET stage = 'pending', progress_pct = 0, updated_at = excluded.updated_at`,
+      )
+      .run(ref.id, now);
 
-    const job = this.withSlot(() => this.run(ref, opts)).finally(() => this.running.delete(ref.id));
+    const job = this.withSlot(() => this.run(ref, opts))
+      .catch((err) => {
+        // run() handles its own errors; this guards cleanup/reporting crashes
+        // so a long-lived MCP process never sees an unhandled rejection.
+        console.error(`[video-context-mcp] ingest job ${ref.id} crashed:`, err);
+      })
+      .finally(() => this.running.delete(ref.id));
     this.running.set(ref.id, job);
     return { videoId: ref.id, stage: 'pending', cached: false, alreadyRunning: false };
   }
@@ -99,6 +116,45 @@ export class IngestManager {
     while (this.running.size > 0) {
       await Promise.allSettled([...this.running.values()]);
     }
+  }
+
+  /**
+   * Atomically replace the transcript and reconcile caption metadata.
+   * A whisper transcript clears stale caption fields from a previous ingest.
+   * Public for tests.
+   */
+  applyTranscript(
+    videoId: string,
+    vtt: string,
+    source: 'captions' | 'whisper',
+    captionTrack: { lang: string; auto: boolean } | null,
+  ): number {
+    const segments = mergeCues(parseVtt(vtt));
+    const insert = this.db.prepare(
+      'INSERT INTO segments (video_id, start_ms, end_ms, text, source) VALUES (?, ?, ?, ?, ?)',
+    );
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM segments WHERE video_id = ?').run(videoId);
+      for (const s of segments) insert.run(videoId, s.startMs, s.endMs, s.text, source);
+      this.db
+        .prepare('UPDATE videos SET captions_lang = ?, captions_auto = ? WHERE id = ?')
+        .run(
+          captionTrack?.lang ?? null,
+          captionTrack ? (captionTrack.auto ? 1 : 0) : null,
+          videoId,
+        );
+    })();
+    return segments.length;
+  }
+
+  private applyChapters(videoId: string, chapters: { startMs: number; title: string }[]): void {
+    const insert = this.db.prepare(
+      'INSERT INTO chapters (video_id, start_ms, title) VALUES (?, ?, ?)',
+    );
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM chapters WHERE video_id = ?').run(videoId);
+      for (const ch of chapters) insert.run(videoId, ch.startMs, ch.title);
+    })();
   }
 
   private async withSlot(fn: () => Promise<void>): Promise<void> {
@@ -115,7 +171,6 @@ export class IngestManager {
   }
 
   private setStage(videoId: string, stage: string, pct: number): void {
-    const now = new Date().toISOString();
     this.db.prepare('UPDATE videos SET stage = ? WHERE id = ?').run(stage, videoId);
     this.setProgress(videoId, stage, pct);
   }
@@ -139,12 +194,7 @@ export class IngestManager {
         this.db
           .prepare('UPDATE videos SET title = ?, channel = ?, duration_s = ? WHERE id = ?')
           .run(meta.title, meta.channel, meta.durationS, ref.id);
-        const insertChapter = this.db.prepare(
-          'INSERT INTO chapters (video_id, start_ms, title) VALUES (?, ?, ?)',
-        );
-        this.db.transaction(() => {
-          for (const ch of meta.chapters) insertChapter.run(ref.id, ch.startMs, ch.title);
-        })();
+        this.applyChapters(ref.id, meta.chapters);
 
         this.setStage(ref.id, 'transcript', 25);
         captionTrack = pickCaptionTrack(meta);
@@ -158,14 +208,10 @@ export class IngestManager {
           .prepare('UPDATE videos SET title = ?, duration_s = ? WHERE id = ?')
           .run(basename(ref.source), probe.durationS, ref.id);
         this.setStage(ref.id, 'transcript', 25);
-        // Local files have no caption track; whisper fallback lands in Phase 3.
       }
 
       if (captionsVtt) {
-        this.insertSegments(ref.id, captionsVtt, 'captions');
-        this.db
-          .prepare('UPDATE videos SET captions_lang = ?, captions_auto = ? WHERE id = ?')
-          .run(captionTrack!.lang, captionTrack!.auto ? 1 : 0, ref.id);
+        this.applyTranscript(ref.id, captionsVtt, 'captions', captionTrack);
       }
 
       // Sub-stage failures downgrade to warnings: whatever succeeded stays usable.
@@ -191,11 +237,13 @@ export class IngestManager {
           const vtt = await transcribeToVtt(mediaPath, workDir, this.config, (pct) =>
             this.setProgress(ref.id, 'whisper', 30 + Math.round(pct * 0.15)),
           );
-          this.insertSegments(ref.id, vtt, 'whisper');
+          this.applyTranscript(ref.id, vtt, 'whisper', null);
         } catch (err) {
           warn(err, 'ASR_FAILED');
         }
       }
+      // If no new transcript was derived, any previous transcript is
+      // intentionally left in place (the content did not change).
 
       if (opts.visual !== false) {
         try {
@@ -218,6 +266,8 @@ export class IngestManager {
         );
       this.setProgress(ref.id, 'done', 100);
     } catch (err) {
+      // Hard failure: mark the error but leave all previously derived data
+      // (from this run's completed swaps or an earlier ingest) untouched.
       const code = err instanceof VcmError ? err.code : 'YTDLP_FAILED';
       const detail = err instanceof Error ? err.message : String(err);
       this.db
@@ -225,21 +275,15 @@ export class IngestManager {
         .run(code, detail, ref.id);
       this.setProgress(ref.id, 'error', 0);
     } finally {
-      rmSync(workDir, { recursive: true, force: true });
+      safeRm(workDir);
     }
   }
 
-  private insertSegments(videoId: string, vtt: string, source: 'captions' | 'whisper'): void {
-    const segments = mergeCues(parseVtt(vtt));
-    const insert = this.db.prepare(
-      'INSERT INTO segments (video_id, start_ms, end_ms, text, source) VALUES (?, ?, ?, ?, ?)',
-    );
-    this.db.transaction(() => {
-      for (const s of segments) insert.run(videoId, s.startMs, s.endMs, s.text, source);
-    })();
-  }
-
-  /** frames stage (download + scene-detect keyframes) then ocr stage. */
+  /**
+   * frames stage (download + scene-detect keyframes) then ocr stage.
+   * Frame rows are committed as soon as extraction succeeds — OCR failure
+   * (e.g. tesseract missing) degrades to unclassified frames, not zero frames.
+   */
   private async runVisual(ref: VideoRef, videoDir: string, workDir: string): Promise<void> {
     this.setStage(ref.id, 'frames', 45);
     let videoPath: string;
@@ -256,23 +300,34 @@ export class IngestManager {
       }
     ).d;
     const frames = await extractFrames(videoPath, videoDir, this.config, duration);
-    if (ref.kind === 'youtube') rmSync(videoPath, { force: true }); // source media gone ASAP
+    if (ref.kind === 'youtube') safeRm(videoPath); // source media gone ASAP
+
+    // Swap in the new frame generation (files are already in place on disk).
+    const insertFrame = this.db.prepare(
+      'INSERT INTO frames (video_id, ts_ms, path, width, height, class) VALUES (?, ?, ?, ?, ?, NULL)',
+    );
+    const frameIds: number[] = [];
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM frames WHERE video_id = ?').run(ref.id);
+      for (const f of frames) {
+        const res = insertFrame.run(ref.id, f.tsMs, f.path, f.width, f.height);
+        frameIds.push(Number(res.lastInsertRowid));
+      }
+    })();
 
     this.setStage(ref.id, 'ocr', 65);
-    const insertFrame = this.db.prepare(
-      'INSERT INTO frames (video_id, ts_ms, path, width, height, class) VALUES (?, ?, ?, ?, ?, ?)',
-    );
+    const updateClass = this.db.prepare('UPDATE frames SET class = ? WHERE id = ?');
     const insertBlock = this.db.prepare(
       'INSERT INTO ocr_blocks (frame_id, text, bbox_json, conf) VALUES (?, ?, ?, ?)',
     );
     for (let i = 0; i < frames.length; i++) {
       const frame = frames[i]!;
-      const blocks = await ocrFrame(frame.path, this.config);
+      const blocks = await ocrFrame(frame.path, this.config); // throws only on missing binary
       const cls = classifyFrame(blocks);
       this.db.transaction(() => {
-        const res = insertFrame.run(ref.id, frame.tsMs, frame.path, frame.width, frame.height, cls);
+        updateClass.run(cls, frameIds[i]!);
         for (const b of blocks) {
-          insertBlock.run(res.lastInsertRowid, b.text, JSON.stringify(b.bbox), b.conf);
+          insertBlock.run(frameIds[i]!, b.text, JSON.stringify(b.bbox), b.conf);
         }
       })();
       if (i % 5 === 4) {

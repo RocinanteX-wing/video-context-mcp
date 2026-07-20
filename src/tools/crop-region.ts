@@ -10,8 +10,8 @@ import {
   frameOcrBlocks,
   getVideoRow,
   imageContent,
+  ingestStateNote,
   nearestFrame,
-  requireDone,
 } from './shared.js';
 
 export const name = 'crop_region';
@@ -33,6 +33,8 @@ export const inputSchema = {
     .describe('[x0, y0, x1, y1] normalized to the frame (0,0 = top-left)'),
 };
 
+let tmpCounter = 0;
+
 function intersects(
   a: [number, number, number, number],
   b: [number, number, number, number],
@@ -51,21 +53,26 @@ export function handler(deps: Deps) {
         );
       }
       const row = getVideoRow(deps.db, args.video_id);
-      requireDone(row, deps.ingest);
+      const note = ingestStateNote(row, deps.ingest);
       const tsMs = parseTimestamp(args.timestamp);
       const frame = nearestFrame(deps.db, row.id, tsMs);
 
-      const tmpPath = join(tmpdir(), `vcm-crop-${process.pid}-${frame.id}.jpg`);
-      await cropFrame(
-        frame.path,
-        tmpPath,
-        frame.width,
-        frame.height,
-        [x0, y0, x1, y1],
-        deps.config,
-      );
-      const base64 = readFileSync(tmpPath).toString('base64');
-      rmSync(tmpPath, { force: true });
+      // Unique name: concurrent crops of the same frame must not collide.
+      const tmpPath = join(tmpdir(), `vcm-crop-${process.pid}-${++tmpCounter}.jpg`);
+      let base64: string;
+      try {
+        await cropFrame(
+          frame.path,
+          tmpPath,
+          frame.width,
+          frame.height,
+          [x0, y0, x1, y1],
+          deps.config,
+        );
+        base64 = readFileSync(tmpPath).toString('base64');
+      } finally {
+        rmSync(tmpPath, { force: true });
+      }
 
       const inRegion = frameOcrBlocks(deps.db, frame).filter((b) =>
         intersects(b.bbox, [x0, y0, x1, y1]),
@@ -75,6 +82,7 @@ export function handler(deps: Deps) {
         ...(inRegion.length > 0
           ? ['', 'OCR inside region:', ...inRegion.map((b) => `- "${b.text}" (conf=${b.conf})`)]
           : ['', 'No OCR text inside this region — read the image directly.']),
+        ...(note ? ['', note] : []),
       ];
       return { content: [imageContent(base64), { type: 'text' as const, text: lines.join('\n') }] };
     } catch (err) {

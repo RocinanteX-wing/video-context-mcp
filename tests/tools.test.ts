@@ -1,0 +1,88 @@
+/**
+ * Tool-handler tests against a seeded database: partial-result serving during
+ * ingest, range validation, and no-frames guidance.
+ */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type Database from 'better-sqlite3';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { loadConfig } from '../src/config.js';
+import { openDb } from '../src/db.js';
+import { IngestManager } from '../src/pipeline/ingest.js';
+import * as getTranscript from '../src/tools/get-transcript.js';
+import * as getVideoTimeline from '../src/tools/get-video-timeline.js';
+import * as peekFrame from '../src/tools/peek-frame.js';
+import type { Deps } from '../src/tools/shared.js';
+
+const VID = 'vidPartial01';
+
+function text(res: { content: { type: string; text?: string }[] }): string {
+  return res.content
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n');
+}
+
+describe('tool handlers on partial/seeded state', () => {
+  let dir: string;
+  let db: Database.Database;
+  let deps: Deps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vcm-tools-'));
+    db = openDb(dir);
+    const config = loadConfig({ VCM_CACHE_DIR: dir });
+    deps = { db, config, ingest: new IngestManager(db, config) };
+    // Mid-ingest video: transcript landed, frames still processing.
+    db.prepare(
+      `INSERT INTO videos (id, kind, source_url, title, duration_s, captions_lang, captions_auto, stage)
+       VALUES (?, 'youtube', 'https://www.youtube.com/watch?v=${VID}', 'Partial Video', 120, 'en', 1, 'frames')`,
+    ).run(VID);
+    db.prepare(
+      "INSERT INTO segments (video_id, start_ms, end_ms, text, source) VALUES (?, 0, 4000, 'early words available now', 'captions')",
+    ).run(VID);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('get_transcript serves partial results mid-ingest with a state note', async () => {
+    const res = await getTranscript.handler(deps)({ video_id: VID });
+    const out = text(res as never);
+    expect(out).toContain('early words available now');
+    expect(out).toContain('ingest in progress (stage=frames');
+    expect((res as { isError?: boolean }).isError).toBeUndefined();
+  });
+
+  it('get_video_timeline serves metadata mid-ingest with a state note', async () => {
+    const res = await getVideoTimeline.handler(deps)({ video_id: VID });
+    const out = text(res as never);
+    expect(out).toContain('Partial Video');
+    expect(out).toContain('ingest in progress');
+  });
+
+  it('get_transcript rejects inverted ranges', async () => {
+    const res = await getTranscript.handler(deps)({ video_id: VID, start: '2:00', end: '1:00' });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(text(res as never)).toContain('Invalid range');
+  });
+
+  it('peek_frame explains missing keyframes actionably', async () => {
+    const res = await peekFrame.handler(deps)({ video_id: VID, timestamp: 10 });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(text(res as never)).toContain('No keyframes indexed');
+  });
+
+  it('data from an earlier ingest stays served after a failed re-ingest', async () => {
+    db.prepare(
+      "UPDATE videos SET stage = 'error', error_code = 'NETWORK', error_detail = 'yt-dlp timed out' WHERE id = ?",
+    ).run(VID);
+    const res = await getTranscript.handler(deps)({ video_id: VID });
+    const out = text(res as never);
+    expect(out).toContain('early words available now');
+    expect(out).toContain('last ingest FAILED [NETWORK]');
+  });
+});

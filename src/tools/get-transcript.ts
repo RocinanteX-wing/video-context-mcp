@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { toToolError } from '../errors.js';
+import { VcmError, toToolError } from '../errors.js';
 import { formatMs, parseTimestamp } from '../utils/time.js';
-import { type Deps, getVideoRow, requireDone, textResult } from './shared.js';
+import { type Deps, getVideoRow, ingestStateNote, textResult } from './shared.js';
 
 export const name = 'get_transcript';
 
@@ -25,10 +25,16 @@ export function handler(deps: Deps) {
   return async (args: { video_id: string; start?: string | number; end?: string | number }) => {
     try {
       const row = getVideoRow(deps.db, args.video_id);
-      requireDone(row, deps.ingest);
+      const note = ingestStateNote(row, deps.ingest);
 
       const startMs = args.start !== undefined ? parseTimestamp(args.start) : 0;
       const endMs = args.end !== undefined ? parseTimestamp(args.end) : Number.MAX_SAFE_INTEGER;
+      if (endMs < startMs) {
+        throw new VcmError(
+          'UNSUPPORTED_URL',
+          `Invalid range: end (${formatMs(endMs)}) is before start (${formatMs(startMs)}).`,
+        );
+      }
       const segments = deps.db
         .prepare(
           `SELECT start_ms, end_ms, text FROM segments
@@ -39,7 +45,7 @@ export function handler(deps: Deps) {
 
       if (segments.length === 0) {
         return textResult(
-          `No transcript segments in range for ${row.id}. The video may have no captions (check get_ingest_status) or the range may be outside its duration.`,
+          `No transcript segments in range for ${row.id}. The video may have no captions (check get_ingest_status) or the range may be outside its duration.${note ? `\n${note}` : ''}`,
         );
       }
 
@@ -61,6 +67,7 @@ export function handler(deps: Deps) {
           `[TRUNCATED at ${formatMs(truncatedAt)}] Call get_transcript again with start="${formatMs(truncatedAt)}" to continue.`,
         );
       }
+      if (note) lines.push('', note);
       return textResult(lines.join('\n'));
     } catch (err) {
       return toToolError(err);

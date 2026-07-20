@@ -137,6 +137,17 @@ function migrate(db: Database.Database): void {
       db.pragma('user_version = 2');
     })();
   }
+  if (version < 3) {
+    // External-content FTS tables only index rows written AFTER their triggers
+    // exist — rebuild so rows that predate a migration become searchable.
+    db.transaction(() => {
+      db.exec(`
+        INSERT INTO segments_fts(segments_fts) VALUES('rebuild');
+        INSERT INTO ocr_fts(ocr_fts) VALUES('rebuild');
+      `);
+      db.pragma('user_version = 3');
+    })();
+  }
 }
 
 /**

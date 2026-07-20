@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { toToolError } from '../errors.js';
+import { VcmError } from '../errors.js';
 import { formatMs } from '../utils/time.js';
-import { type Deps, getVideoRow, requireDone, textResult } from './shared.js';
+import { type Deps, getVideoRow, ingestStateNote, textResult } from './shared.js';
 
 export const name = 'get_video_timeline';
 
@@ -21,7 +22,11 @@ export function handler(deps: Deps) {
   return async (args: { video_id: string }) => {
     try {
       const row = getVideoRow(deps.db, args.video_id);
-      requireDone(row, deps.ingest);
+      const note = ingestStateNote(row, deps.ingest);
+      if (row.title === null) {
+        // Nothing usable yet — not even metadata has landed.
+        throw new VcmError('STAGE_NOT_READY', note ?? `Video ${row.id} has no data yet.`);
+      }
 
       const chapters = deps.db
         .prepare('SELECT start_ms, title FROM chapters WHERE video_id = ? ORDER BY start_ms')
@@ -88,6 +93,7 @@ export function handler(deps: Deps) {
         lines.push('No transcript available for this video (no captions).');
       }
 
+      if (note) lines.push('', note);
       return textResult(lines.join('\n'));
     } catch (err) {
       return toToolError(err);

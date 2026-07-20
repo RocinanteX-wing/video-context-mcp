@@ -110,7 +110,7 @@ export function classifyYtdlpFailure(
   return new VcmError('YTDLP_FAILED', `yt-dlp failed: ${tail || 'unknown error'}`);
 }
 
-/** Format any thrown value into an MCP tool error payload. */
+/** Format any thrown value into an MCP tool error payload (always bounded). */
 export function toToolError(err: unknown): {
   content: { type: 'text'; text: string }[];
   isError: true;
@@ -119,7 +119,7 @@ export function toToolError(err: unknown): {
     err instanceof VcmError
       ? `[${err.code}] ${err.message}`
       : err instanceof Error
-        ? `[INTERNAL] ${err.message}`
-        : `[INTERNAL] ${String(err)}`;
+        ? `[INTERNAL] ${err.message.slice(0, 400)}`
+        : `[INTERNAL] ${String(err).slice(0, 400)}`;
   return { content: [{ type: 'text', text: msg }], isError: true };
 }

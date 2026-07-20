@@ -1,5 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -11,8 +10,8 @@ import {
   frameOcrBlocks,
   getVideoRow,
   imageContent,
+  ingestStateNote,
   nearestFrame,
-  requireDone,
 } from './shared.js';
 
 export const name = 'peek_frame';
@@ -33,12 +32,13 @@ export const inputSchema = {
 
 const PEEK_WIDTH = 1024;
 const NEAR_TOLERANCE_MS = 15_000;
+let tmpCounter = 0;
 
 export function handler(deps: Deps) {
   return async (args: { video_id: string; timestamp: string | number; return_image?: boolean }) => {
     try {
       const row = getVideoRow(deps.db, args.video_id);
-      requireDone(row, deps.ingest);
+      const note = ingestStateNote(row, deps.ingest);
       const tsMs = parseTimestamp(args.timestamp);
       const frame = nearestFrame(deps.db, row.id, tsMs);
       const blocks = frameOcrBlocks(deps.db, frame);
@@ -60,18 +60,22 @@ export function handler(deps: Deps) {
       } else {
         lines.push('', 'No OCR text detected on this frame.');
       }
+      if (note) lines.push('', note);
 
       const content: ({ type: 'text'; text: string } | ReturnType<typeof imageContent>)[] = [];
       if (args.return_image !== false) {
-        let imgPath = frame.path;
-        let tmpPath: string | null = null;
         if (frame.width > PEEK_WIDTH) {
-          tmpPath = join(tmpdir(), `vcm-peek-${process.pid}-${frame.id}.jpg`);
-          await reencodeFrame(frame.path, tmpPath, PEEK_WIDTH, deps.config);
-          imgPath = tmpPath;
+          // Unique name: concurrent peeks of the same frame must not collide.
+          const tmpPath = join(tmpdir(), `vcm-peek-${process.pid}-${++tmpCounter}.jpg`);
+          try {
+            await reencodeFrame(frame.path, tmpPath, PEEK_WIDTH, deps.config);
+            content.push(imageContent(readFileSync(tmpPath).toString('base64')));
+          } finally {
+            rmSync(tmpPath, { force: true });
+          }
+        } else {
+          content.push(imageContent(readFileSync(frame.path).toString('base64')));
         }
-        content.push(imageContent(readFileSync(imgPath).toString('base64')));
-        if (tmpPath) rmSync(tmpPath, { force: true });
       }
       content.push({ type: 'text', text: lines.join('\n') });
       return { content };

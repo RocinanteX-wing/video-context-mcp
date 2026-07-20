@@ -34,6 +34,16 @@ describe('resolveRef', () => {
     expect(a.source).toBe(p);
   });
 
+  it('rejects directories and other non-regular files', () => {
+    try {
+      resolveRef(tmpdir());
+      expect.unreachable();
+    } catch (e) {
+      expect((e as VcmError).code).toBe('FILE_NOT_FOUND');
+      expect((e as VcmError).message).toContain('regular file');
+    }
+  });
+
   it('rejects missing local files with FILE_NOT_FOUND', () => {
     expect(() => resolveRef('/nope/definitely-missing.mp4')).toThrowError(VcmError);
     try {

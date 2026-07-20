@@ -36,11 +36,19 @@ function cleanLine(line: string): string {
     .trim();
 }
 
+/**
+ * YouTube rolling auto-captions repeat the previous cue's line in the next,
+ * temporally contiguous cue. Genuine repeated speech separated by a gap must
+ * NOT be deduplicated — only overlap within this window counts as rolling.
+ */
+const ROLLING_GAP_MS = 1500;
+
 export function parseVtt(vtt: string): Cue[] {
   const lines = vtt.split(/\r?\n/);
   const cues: Cue[] = [];
   let i = 0;
   let prevLines: string[] = [];
+  let prevEndMs = Number.NEGATIVE_INFINITY;
 
   while (i < lines.length) {
     const timing = lines[i]?.match(TIMING_RE);
@@ -59,9 +67,13 @@ export function parseVtt(vtt: string): Cue[] {
     }
 
     const cleaned = rawLines.map(cleanLine).filter((l) => l.length > 0);
-    // Rolling-caption dedup: drop lines already shown in the previous cue.
-    const fresh = cleaned.filter((l) => !prevLines.includes(l));
-    if (cleaned.length > 0) prevLines = cleaned;
+    // Rolling-caption dedup, scoped to temporally contiguous cues only.
+    const isRolling = startMs - prevEndMs <= ROLLING_GAP_MS;
+    const fresh = isRolling ? cleaned.filter((l) => !prevLines.includes(l)) : cleaned;
+    if (cleaned.length > 0) {
+      prevLines = cleaned;
+      prevEndMs = endMs;
+    }
 
     const text = fresh.join(' ').trim();
     if (text) cues.push({ startMs, endMs, text });
