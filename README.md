@@ -14,8 +14,12 @@ Most video tools for agents either lock you to one model provider or eagerly dum
 
 ## Install & register
 
+Not yet published to npm — install from source:
+
 ```bash
-npm install -g @smallthinkingmachines/video-context-mcp
+git clone https://github.com/smallthinkingmachines/video-context-mcp.git
+cd video-context-mcp
+npm install && npm run build
 ```
 
 **Claude Code / Gemini-style JSON config:**
@@ -23,7 +27,10 @@ npm install -g @smallthinkingmachines/video-context-mcp
 ```json
 {
   "mcpServers": {
-    "video-context": { "command": "video-context-mcp" }
+    "video-context": {
+      "command": "node",
+      "args": ["/path/to/video-context-mcp/dist/index.js"]
+    }
   }
 }
 ```
@@ -32,8 +39,11 @@ npm install -g @smallthinkingmachines/video-context-mcp
 
 ```toml
 [mcp_servers.video-context]
-command = "video-context-mcp"
+command = "node"
+args = ["/path/to/video-context-mcp/dist/index.js"]
 ```
+
+Once published to npm, `npm install -g @smallthinkingmachines/video-context-mcp` will provide a `video-context-mcp` binary you can use as the `command` directly.
 
 ## Tools
 
@@ -65,6 +75,8 @@ All optional (see `.env.example`): `VCM_CACHE_DIR` (default `~/.cache/video-cont
 ## Notes
 
 Intended for personal research and note-taking on content you can legitimately access. Caption/metadata fetching uses `yt-dlp`; respect YouTube's Terms of Service and copyright. Cookies are user-supplied and never bundled.
+
+**Trust boundary:** the server trusts its MCP client. In particular, `ingest_video` will read any local file path the client asks for (by design — it's your agent indexing your files), and the cache is plain files on disk. Run it as a local stdio server for clients you control; do not expose it to untrusted clients or over the network without adding your own authorization layer.
 
 ## Development
 
