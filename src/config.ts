@@ -12,6 +12,8 @@ export interface Config {
   whisperBin: string;
   /** Path to a ggml whisper model; unset = auto-download base.en to the cache. */
   whisperModel?: string;
+  /** HF model id for dense embeddings (Transformers.js/ONNX). */
+  embedModel: string;
   /** Max height of the video stream downloaded for frame extraction. */
   maxVideoHeight: number;
   /** ffmpeg scene-change score threshold (0..1) for keyframe selection. */
@@ -50,6 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tesseractBin: env.VCM_TESSERACT_BIN ?? 'tesseract',
     whisperBin: env.VCM_WHISPER_BIN ?? 'whisper-cli',
     whisperModel: env.VCM_WHISPER_MODEL ? expandHome(env.VCM_WHISPER_MODEL) : undefined,
+    embedModel: env.VCM_EMBED_MODEL ?? 'Xenova/all-MiniLM-L6-v2',
     maxVideoHeight: num(env.VCM_MAX_VIDEO_HEIGHT, 720),
     sceneThreshold: num(env.VCM_SCENE_THRESHOLD, 0.3),
     minFrameGapS: num(env.VCM_MIN_FRAME_GAP_S, 10),

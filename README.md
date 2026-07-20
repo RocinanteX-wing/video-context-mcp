@@ -43,7 +43,7 @@ command = "video-context-mcp"
 | `get_ingest_status` | Stage, progress, what's queryable, actionable errors |
 | `get_video_timeline` | Compact overview: chapters + sampled transcript outline |
 | `get_transcript` | Timestamped transcript, sliceable by range |
-| `search_videos` | Full-text search over speech AND on-screen text (OCR) |
+| `search_videos` | Hybrid search (full-text + semantic, RRF-fused) over speech AND on-screen text |
 | `peek_frame` | The keyframe image nearest a timestamp + its OCR text — *you* look at it |
 | `crop_region` | Zoom into a bbox of a frame (IDE panel, diagram) for dense text |
 | `list_videos` / `delete_video` | Cache inventory and cleanup |
@@ -58,8 +58,8 @@ All optional (see `.env.example`): `VCM_CACHE_DIR` (default `~/.cache/video-cont
 
 - **Phase 1 (shipped):** metadata + captions transcript + timeline + FTS search
 - **Phase 2 (shipped):** keyframes (ffmpeg scene detection), `peek_frame` / `crop_region` returning images the *client* model interprets (stays model-agnostic), tesseract OCR into search. Known limitation: YouTube's SABR streaming experiment can cap downloads at 360p, degrading code OCR — surfaced as a note in `get_ingest_status`.
-- **Phase 3 (this release):** local whisper fallback — `ingest_video(…, whisper_fallback=true)` transcribes caption-less videos (and local files) with whisper.cpp; ASR failures downgrade to warnings without sinking the ingest
-- **Phase 4:** hybrid dense+lexical search across your video library
+- **Phase 3 (shipped):** local whisper fallback — `ingest_video(…, whisper_fallback=true)` transcribes caption-less videos (and local files) with whisper.cpp; ASR failures downgrade to warnings without sinking the ingest
+- **Phase 4 (this release):** hybrid dense+lexical search — ONNX embeddings (`Xenova/all-MiniLM-L6-v2` by default, ~25 MB auto-download, override via `VCM_EMBED_MODEL`) in LanceDB, fused with FTS5 by reciprocal rank. Paraphrase queries ("how do they avoid memory bugs") now match; degrades gracefully to FTS-only if the model is unavailable
 - **Phase 5 (experimental):** on-screen code diff reconstruction, diagram→Mermaid, deictic alignment
 
 ## Notes

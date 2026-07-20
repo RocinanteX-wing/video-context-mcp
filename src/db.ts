@@ -9,11 +9,19 @@ export type Stage =
   | 'whisper'
   | 'frames'
   | 'ocr'
+  | 'embed'
   | 'done'
   | 'error';
 
-/** Ordered pipeline stages (whisper/frames/ocr are conditional). */
-export const PIPELINE_STAGES: Stage[] = ['metadata', 'transcript', 'whisper', 'frames', 'ocr'];
+/** Ordered pipeline stages (whisper/frames/ocr/embed are conditional). */
+export const PIPELINE_STAGES: Stage[] = [
+  'metadata',
+  'transcript',
+  'whisper',
+  'frames',
+  'ocr',
+  'embed',
+];
 
 const SCHEMA_V1 = `
 CREATE TABLE videos (
@@ -146,6 +154,13 @@ function migrate(db: Database.Database): void {
         INSERT INTO ocr_fts(ocr_fts) VALUES('rebuild');
       `);
       db.pragma('user_version = 3');
+    })();
+  }
+  if (version < 4) {
+    // NULL = never embedded (semantic search unavailable for the video).
+    db.transaction(() => {
+      db.exec('ALTER TABLE videos ADD COLUMN embedded_count INTEGER');
+      db.pragma('user_version = 4');
     })();
   }
 }

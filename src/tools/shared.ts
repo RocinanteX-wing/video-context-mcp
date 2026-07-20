@@ -23,6 +23,7 @@ export interface VideoRow {
   error_code: string | null;
   error_detail: string | null;
   opts_json: string;
+  embedded_count: number | null;
 }
 
 export function textResult(text: string): { content: { type: 'text'; text: string }[] } {

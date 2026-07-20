@@ -28,6 +28,10 @@ export const inputSchema = {
       'Download the video and index keyframes+OCR for peek_frame/crop_region and screen-text ' +
         'search (default true; adds minutes for long videos). Set false for fast transcript-only ingest.',
     ),
+  embed: z
+    .boolean()
+    .optional()
+    .describe('Embed transcript+screen text for semantic search_videos matching (default true)'),
 };
 
 export function handler(deps: Deps) {
@@ -36,12 +40,14 @@ export function handler(deps: Deps) {
     whisper_fallback?: boolean;
     force?: boolean;
     visual?: boolean;
+    embed?: boolean;
   }) => {
     try {
       const res = deps.ingest.start(args.url_or_path, {
         whisperFallback: args.whisper_fallback,
         force: args.force,
         visual: args.visual,
+        embed: args.embed,
       });
       return jsonResult({
         video_id: res.videoId,

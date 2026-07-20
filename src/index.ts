@@ -37,7 +37,7 @@ Usage: video-context-mcp            start the MCP server on stdio
 
 Environment: VCM_CACHE_DIR, YTDLP_COOKIES_FILE, VCM_MAX_CACHE_GB,
              VCM_YTDLP_BIN, VCM_FFMPEG_BIN, VCM_FFPROBE_BIN, VCM_TESSERACT_BIN,
-             VCM_WHISPER_BIN, VCM_WHISPER_MODEL,
+             VCM_WHISPER_BIN, VCM_WHISPER_MODEL, VCM_EMBED_MODEL,
              VCM_MAX_VIDEO_HEIGHT, VCM_SCENE_THRESHOLD, VCM_MIN_FRAME_GAP_S, VCM_MAX_FRAMES
 Requires yt-dlp on PATH; ffmpeg + tesseract for visual indexing;
 whisper-cli (whisper.cpp) for whisper_fallback ASR.

@@ -21,6 +21,7 @@ export type ErrorCode =
   | 'NETWORK'
   | 'VISUAL_FAILED'
   | 'ASR_FAILED'
+  | 'EMBED_FAILED'
   | 'YTDLP_FAILED';
 
 export class VcmError extends Error {

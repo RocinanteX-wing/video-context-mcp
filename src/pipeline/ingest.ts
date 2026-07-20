@@ -23,6 +23,8 @@ export interface IngestOptions {
   force?: boolean;
   /** Download the video and index keyframes+OCR (default true). */
   visual?: boolean;
+  /** Embed transcript+screen text for semantic search (default true). */
+  embed?: boolean;
 }
 
 export interface StartResult {
@@ -216,7 +218,7 @@ export class IngestManager {
 
       // Sub-stage failures downgrade to warnings: whatever succeeded stays usable.
       const warnings: VcmError[] = [];
-      const warn = (err: unknown, fallback: 'ASR_FAILED' | 'VISUAL_FAILED') => {
+      const warn = (err: unknown, fallback: 'ASR_FAILED' | 'VISUAL_FAILED' | 'EMBED_FAILED') => {
         warnings.push(
           err instanceof VcmError
             ? err
@@ -250,6 +252,23 @@ export class IngestManager {
           await this.runVisual(ref, videoDir, workDir);
         } catch (err) {
           warn(err, 'VISUAL_FAILED');
+        }
+      }
+
+      if (opts.embed !== false) {
+        this.setStage(ref.id, 'embed', 96);
+        try {
+          // Dynamic import: the ONNX runtime stays unloaded unless needed.
+          const { embedVideo } = await import('./embed.js');
+          const count = await embedVideo(this.db, ref.id, this.config);
+          this.db.prepare('UPDATE videos SET embedded_count = ? WHERE id = ?').run(count, ref.id);
+        } catch (err) {
+          warn(
+            err instanceof VcmError
+              ? err
+              : new VcmError('EMBED_FAILED', err instanceof Error ? err.message : String(err)),
+            'EMBED_FAILED',
+          );
         }
       }
 

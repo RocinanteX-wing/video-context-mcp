@@ -62,6 +62,11 @@ export function handler(deps: Deps) {
           `Keyframes are low-resolution (${maxFrameWidth}px wide — YouTube is currently serving only progressive 360p to this yt-dlp session, a SABR streaming restriction). OCR on dense text like code will be degraded; peek_frame images are still readable for large text. Re-ingesting later or updating yt-dlp may restore 720p.`,
         );
       }
+      if (row.stage === 'done' && segments > 0 && row.embedded_count === null) {
+        notes.push(
+          'This video predates semantic search — search_videos uses full-text only for it. Re-ingest with force=true to embed.',
+        );
+      }
       if (row.stage === 'done' && segments === 0) {
         const opts = JSON.parse(row.opts_json ?? '{}') as { whisperFallback?: boolean };
         const source =
@@ -87,6 +92,7 @@ export function handler(deps: Deps) {
           segments,
           frames,
           ocr_blocks: ocrBlocks,
+          vectors: row.embedded_count,
         },
         captions: row.captions_lang
           ? { lang: row.captions_lang, auto: Boolean(row.captions_auto) }

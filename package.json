@@ -1,6 +1,6 @@
 {
   "name": "@smallthinkingmachines/video-context-mcp",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Model-agnostic MCP server that turns videos into an interactive, queryable knowledge structure — transcript, keyframes, OCR, and search that any MCP client can scrub lazily",
   "type": "module",
   "main": "dist/index.js",
@@ -45,7 +45,10 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "@lancedb/lancedb": "^0.23.0",
     "@modelcontextprotocol/sdk": "^1.25.0",
+    "apache-arrow": "^18.1.0",
     "better-sqlite3": "^12.6.2",
     "zod": "^3.25.0"
   },

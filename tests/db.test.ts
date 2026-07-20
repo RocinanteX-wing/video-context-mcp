@@ -28,10 +28,10 @@ describe('db', () => {
   }
 
   it('migrates a fresh database and is idempotent on reopen', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(3);
+    expect(db.pragma('user_version', { simple: true })).toBe(4);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
-    expect(db.pragma('user_version', { simple: true })).toBe(3);
+    expect(db.pragma('user_version', { simple: true })).toBe(4);
   });
 
   it('FTS rebuild makes pre-trigger rows searchable (migration v3 mechanism)', () => {
