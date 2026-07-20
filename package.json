@@ -1,0 +1,60 @@
+{
+  "name": "@smallthinkingmachines/video-context-mcp",
+  "version": "0.1.0",
+  "description": "Model-agnostic MCP server that turns videos into an interactive, queryable knowledge structure — transcript, keyframes, OCR, and search that any MCP client can scrub lazily",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "video-context-mcp": "./dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smallthinkingmachines/video-context-mcp.git"
+  },
+  "homepage": "https://github.com/smallthinkingmachines/video-context-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/smallthinkingmachines/video-context-mcp/issues"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist coverage",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "mcp-server",
+    "youtube",
+    "video",
+    "transcript",
+    "ocr",
+    "keyframes",
+    "video-rag",
+    "claude-code",
+    "codex",
+    "antigravity",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.0",
+    "better-sqlite3": "^12.6.2",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
