@@ -152,6 +152,33 @@ export async function downloadVideo(
   return join(workDir, file);
 }
 
+/** Download only the audio stream (for whisper ASR). Caller deletes after use. */
+export async function downloadAudio(
+  ref: VideoRef,
+  workDir: string,
+  config: Config,
+): Promise<string> {
+  await runYtdlp(
+    [
+      '-f',
+      'bestaudio/best',
+      '--no-warnings',
+      '--no-playlist',
+      '-P',
+      workDir,
+      '-o',
+      'audio.%(ext)s',
+      ref.source,
+    ],
+    config,
+  );
+  const file = readdirSync(workDir).find((f) => f.startsWith('audio.'));
+  if (!file) {
+    throw new VcmError('ASR_FAILED', 'yt-dlp reported success but produced no audio file.');
+  }
+  return join(workDir, file);
+}
+
 /** Duration (and little else) for local files, via ffprobe. */
 export async function probeLocalFile(
   absPath: string,

@@ -2,10 +2,18 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 
-export type Stage = 'pending' | 'metadata' | 'transcript' | 'frames' | 'ocr' | 'done' | 'error';
+export type Stage =
+  | 'pending'
+  | 'metadata'
+  | 'transcript'
+  | 'whisper'
+  | 'frames'
+  | 'ocr'
+  | 'done'
+  | 'error';
 
-/** Ordered pipeline stages for Phase 1. Phase 2/3 insert frames/ocr/whisper here. */
-export const PIPELINE_STAGES: Stage[] = ['metadata', 'transcript'];
+/** Ordered pipeline stages (whisper/frames/ocr are conditional). */
+export const PIPELINE_STAGES: Stage[] = ['metadata', 'transcript', 'whisper', 'frames', 'ocr'];
 
 const SCHEMA_V1 = `
 CREATE TABLE videos (

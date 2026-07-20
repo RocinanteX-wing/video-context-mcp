@@ -36,6 +36,6 @@ Phase 4 adds dense embeddings in LanceDB beside the sqlite file (same pattern as
 |---|---|---|
 | 1 | metadata, captions transcript, timeline, FTS search, lifecycle | shipped |
 | 2 | ffmpeg scene-detect keyframes (≤1280px JPEG stored, ≤1024px served), tesseract OCR + text-density classifier, `peek_frame`/`crop_region`, OCR in search, visual-failure downgrade to warning | shipped — client-model vision |
-| 3 | `whisper-cli` fallback ASR (opt-in per ingest) | captions always preferred |
+| 3 | `whisper-cli` fallback ASR (opt-in per ingest, auto-downloaded ggml model, VTT output through the shared parser, progress via `-pp`) | shipped — captions always preferred |
 | 4 | ONNX embeddings + LanceDB, hybrid RRF search | "RAG over your video library" |
 | 5 | code-diff reconstruction, diagram→Mermaid, deictic alignment | experimental; client-vision workflows first, optional `VISION_ENDPOINT` for ingest-time enrichment |

@@ -38,9 +38,18 @@ export function handler(deps: Deps) {
 
       const lines: string[] = [];
       const dur = row.duration_s ? formatMs(row.duration_s * 1000) : '?';
+      const whisperUsed =
+        segments.length > 0 &&
+        (
+          deps.db.prepare('SELECT source FROM segments WHERE video_id = ? LIMIT 1').get(row.id) as
+            | { source: string }
+            | undefined
+        )?.source === 'whisper';
       const caps = row.captions_lang
         ? `captions: ${row.captions_lang}${row.captions_auto ? ' (auto)' : ''}`
-        : 'no captions';
+        : whisperUsed
+          ? 'transcript: local whisper ASR'
+          : 'no captions';
       const totalFrames = frameClasses.reduce((s, c) => s + c.n, 0);
       const framesDesc =
         totalFrames > 0

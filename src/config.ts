@@ -9,6 +9,9 @@ export interface Config {
   ffmpegBin: string;
   ffprobeBin: string;
   tesseractBin: string;
+  whisperBin: string;
+  /** Path to a ggml whisper model; unset = auto-download base.en to the cache. */
+  whisperModel?: string;
   /** Max height of the video stream downloaded for frame extraction. */
   maxVideoHeight: number;
   /** ffmpeg scene-change score threshold (0..1) for keyframe selection. */
@@ -45,6 +48,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ffmpegBin: env.VCM_FFMPEG_BIN ?? 'ffmpeg',
     ffprobeBin: env.VCM_FFPROBE_BIN ?? 'ffprobe',
     tesseractBin: env.VCM_TESSERACT_BIN ?? 'tesseract',
+    whisperBin: env.VCM_WHISPER_BIN ?? 'whisper-cli',
+    whisperModel: env.VCM_WHISPER_MODEL ? expandHome(env.VCM_WHISPER_MODEL) : undefined,
     maxVideoHeight: num(env.VCM_MAX_VIDEO_HEIGHT, 720),
     sceneThreshold: num(env.VCM_SCENE_THRESHOLD, 0.3),
     minFrameGapS: num(env.VCM_MIN_FRAME_GAP_S, 10),

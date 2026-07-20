@@ -44,7 +44,7 @@ export function handler(deps: Deps) {
       }
       if (row.stage === 'done' && row.error_code) {
         notes.push(
-          `Transcript is ready, but visual indexing failed [${row.error_code}]: ${row.error_detail}. Re-ingest with force=true to retry frames+OCR.`,
+          `Ingest completed with warnings: ${row.error_detail}. Everything else is usable; re-ingest with force=true to retry the failed sub-stage(s).`,
         );
       }
       const maxFrameWidth = (
@@ -52,16 +52,26 @@ export function handler(deps: Deps) {
           .prepare('SELECT MAX(width) AS w FROM frames WHERE video_id = ?')
           .get(args.video_id) as { w: number | null }
       ).w;
-      if (row.stage === 'done' && frames > 0 && (maxFrameWidth ?? 0) < 800) {
+      if (
+        row.kind === 'youtube' &&
+        row.stage === 'done' &&
+        frames > 0 &&
+        (maxFrameWidth ?? 0) < 800
+      ) {
         notes.push(
           `Keyframes are low-resolution (${maxFrameWidth}px wide — YouTube is currently serving only progressive 360p to this yt-dlp session, a SABR streaming restriction). OCR on dense text like code will be degraded; peek_frame images are still readable for large text. Re-ingesting later or updating yt-dlp may restore 720p.`,
         );
       }
       if (row.stage === 'done' && segments === 0) {
-        notes.push(
+        const opts = JSON.parse(row.opts_json ?? '{}') as { whisperFallback?: boolean };
+        const source =
           row.kind === 'local'
-            ? 'Local file indexed (metadata only). Transcription of caption-less media (whisper_fallback) is not yet implemented.'
-            : 'Video has no captions in any language. whisper_fallback transcription is not yet implemented, so transcript/search are empty for this video.',
+            ? 'Local files have no captions'
+            : 'Video has no captions in any language';
+        notes.push(
+          opts.whisperFallback
+            ? `${source} and whisper transcription produced no segments (see warnings above if any).`
+            : `${source}, so transcript/search are empty. Re-ingest with whisper_fallback=true (and force=true) to transcribe locally with whisper.`,
         );
       }
 
@@ -81,6 +91,12 @@ export function handler(deps: Deps) {
         captions: row.captions_lang
           ? { lang: row.captions_lang, auto: Boolean(row.captions_auto) }
           : null,
+        transcript_source:
+          (
+            deps.db
+              .prepare('SELECT source FROM segments WHERE video_id = ? LIMIT 1')
+              .get(args.video_id) as { source: string } | undefined
+          )?.source ?? null,
         error: row.error_code ? { code: row.error_code, detail: row.error_detail } : null,
         notes,
       });

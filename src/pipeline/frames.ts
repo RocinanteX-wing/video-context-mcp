@@ -112,10 +112,14 @@ async function extractPass(
   try {
     return parseShowinfo(await runFfmpeg(args, config));
   } catch (err) {
-    // ffmpeg exits non-zero when a select filter matches no frames at all
-    // ("Output file is empty, nothing was encoded"). That is a valid outcome
-    // (static video) — signal it as zero frames so the caller can fall back.
-    if (err instanceof VcmError && /nothing was encoded|Output file is empty/i.test(err.message)) {
+    // ffmpeg exits non-zero when a select filter matches no frames at all —
+    // "Output file is empty, nothing was encoded" (≤v7) or "Nothing was
+    // written into output file … received no packets" (v8+). That is a valid
+    // outcome (static video) — signal zero frames so the caller can fall back.
+    if (
+      err instanceof VcmError &&
+      /nothing was (encoded|written)|received no packets|Output file is empty/i.test(err.message)
+    ) {
       return [];
     }
     throw err;
@@ -131,6 +135,7 @@ export async function extractFrames(
   videoPath: string,
   videoDir: string,
   config: Config,
+  durationS?: number | null,
 ): Promise<ExtractedFrame[]> {
   const framesDir = join(videoDir, 'frames');
   rmSync(framesDir, { recursive: true, force: true });
@@ -145,9 +150,13 @@ export async function extractFrames(
   );
 
   if (info.length === 0) {
-    // Static video (single slide, fixed camera): sample once a minute instead.
+    // Static video (single slide, fixed camera): sample on an interval instead.
+    // ffmpeg 8's fps filter emits nothing for videos shorter than the period,
+    // so clamp the interval to half the duration when we know it.
+    const interval =
+      durationS && durationS > 0 ? Math.max(1, Math.min(60, Math.floor(durationS / 2))) : 60;
     for (const f of readdirSync(framesDir)) rmSync(join(framesDir, f), { force: true });
-    info = await extractPass(videoPath, framesDir, `fps=1/60,${scale},showinfo`, config);
+    info = await extractPass(videoPath, framesDir, `fps=1/${interval},${scale},showinfo`, config);
   }
 
   const kept = filterByGap(info, config.minFrameGapS * 1000, config.maxFrames);

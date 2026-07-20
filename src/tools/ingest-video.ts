@@ -17,7 +17,8 @@ export const inputSchema = {
     .boolean()
     .optional()
     .describe(
-      'Reserved: transcribe with local whisper when the video has no captions (not yet implemented)',
+      'Transcribe locally with whisper when the video has no captions (slower: roughly real-time ' +
+        'on CPU; the ggml model auto-downloads on first use). Ignored when captions exist.',
     ),
   force: z.boolean().optional().describe('Re-ingest even if the video is already indexed'),
   visual: z

@@ -20,6 +20,7 @@ export type ErrorCode =
   | 'INGEST_INTERRUPTED'
   | 'NETWORK'
   | 'VISUAL_FAILED'
+  | 'ASR_FAILED'
   | 'YTDLP_FAILED';
 
 export class VcmError extends Error {

@@ -10,6 +10,7 @@ Most video tools for agents either lock you to one model provider or eagerly dum
 - [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on PATH (YouTube ingestion)
 - `ffmpeg`/`ffprobe` on PATH (keyframe extraction, local files)
 - `tesseract` on PATH (on-screen text OCR; visual indexing degrades gracefully without it)
+- `whisper-cli` (whisper.cpp) on PATH for `whisper_fallback` ASR on caption-less videos — the ggml model auto-downloads (~148 MB) on first use, or point `VCM_WHISPER_MODEL` at your own
 
 ## Install & register
 
@@ -56,8 +57,8 @@ All optional (see `.env.example`): `VCM_CACHE_DIR` (default `~/.cache/video-cont
 ## Roadmap
 
 - **Phase 1 (shipped):** metadata + captions transcript + timeline + FTS search
-- **Phase 2 (this release):** keyframes (ffmpeg scene detection), `peek_frame` / `crop_region` returning images the *client* model interprets (stays model-agnostic), tesseract OCR into search. Known limitation: YouTube's SABR streaming experiment can cap downloads at 360p, degrading code OCR — surfaced as a note in `get_ingest_status`.
-- **Phase 3:** local whisper fallback for caption-less videos
+- **Phase 2 (shipped):** keyframes (ffmpeg scene detection), `peek_frame` / `crop_region` returning images the *client* model interprets (stays model-agnostic), tesseract OCR into search. Known limitation: YouTube's SABR streaming experiment can cap downloads at 360p, degrading code OCR — surfaced as a note in `get_ingest_status`.
+- **Phase 3 (this release):** local whisper fallback — `ingest_video(…, whisper_fallback=true)` transcribes caption-less videos (and local files) with whisper.cpp; ASR failures downgrade to warnings without sinking the ingest
 - **Phase 4:** hybrid dense+lexical search across your video library
 - **Phase 5 (experimental):** on-screen code diff reconstruction, diagram→Mermaid, deictic alignment
 

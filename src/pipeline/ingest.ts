@@ -8,7 +8,9 @@ import { resolveRef } from '../ids.js';
 import { extractFrames } from './frames.js';
 import { classifyFrame, ocrFrame } from './ocr.js';
 import { mergeCues, parseVtt } from './vtt.js';
+import { transcribeToVtt } from './whisper.js';
 import {
+  downloadAudio,
   downloadCaptions,
   downloadVideo,
   fetchYoutubeMetadata,
@@ -160,28 +162,46 @@ export class IngestManager {
       }
 
       if (captionsVtt) {
-        const segments = mergeCues(parseVtt(captionsVtt));
-        const insert = this.db.prepare(
-          'INSERT INTO segments (video_id, start_ms, end_ms, text, source) VALUES (?, ?, ?, ?, ?)',
-        );
-        this.db.transaction(() => {
-          for (const s of segments) insert.run(ref.id, s.startMs, s.endMs, s.text, 'captions');
-        })();
+        this.insertSegments(ref.id, captionsVtt, 'captions');
         this.db
           .prepare('UPDATE videos SET captions_lang = ?, captions_auto = ? WHERE id = ?')
           .run(captionTrack!.lang, captionTrack!.auto ? 1 : 0, ref.id);
       }
 
-      // Visual stage failures downgrade to a warning: transcript stays usable.
-      let visualError: VcmError | null = null;
+      // Sub-stage failures downgrade to warnings: whatever succeeded stays usable.
+      const warnings: VcmError[] = [];
+      const warn = (err: unknown, fallback: 'ASR_FAILED' | 'VISUAL_FAILED') => {
+        warnings.push(
+          err instanceof VcmError
+            ? err
+            : new VcmError(fallback, err instanceof Error ? err.message : String(err)),
+        );
+      };
+
+      if (!captionsVtt && opts.whisperFallback) {
+        this.setStage(ref.id, 'whisper', 30);
+        try {
+          mkdirSync(workDir, { recursive: true });
+          let mediaPath: string;
+          if (ref.kind === 'youtube') {
+            mediaPath = await downloadAudio(ref, workDir, this.config);
+          } else {
+            mediaPath = ref.source; // never deleted — the user's own file
+          }
+          const vtt = await transcribeToVtt(mediaPath, workDir, this.config, (pct) =>
+            this.setProgress(ref.id, 'whisper', 30 + Math.round(pct * 0.15)),
+          );
+          this.insertSegments(ref.id, vtt, 'whisper');
+        } catch (err) {
+          warn(err, 'ASR_FAILED');
+        }
+      }
+
       if (opts.visual !== false) {
         try {
           await this.runVisual(ref, videoDir, workDir);
         } catch (err) {
-          visualError =
-            err instanceof VcmError
-              ? err
-              : new VcmError('VISUAL_FAILED', err instanceof Error ? err.message : String(err));
+          warn(err, 'VISUAL_FAILED');
         }
       }
 
@@ -190,7 +210,12 @@ export class IngestManager {
         .prepare(
           "UPDATE videos SET stage = 'done', ingested_at = ?, error_code = ?, error_detail = ? WHERE id = ?",
         )
-        .run(now, visualError?.code ?? null, visualError?.message ?? null, ref.id);
+        .run(
+          now,
+          warnings[0]?.code ?? null,
+          warnings.length > 0 ? warnings.map((w) => `[${w.code}] ${w.message}`).join(' | ') : null,
+          ref.id,
+        );
       this.setProgress(ref.id, 'done', 100);
     } catch (err) {
       const code = err instanceof VcmError ? err.code : 'YTDLP_FAILED';
@@ -204,6 +229,16 @@ export class IngestManager {
     }
   }
 
+  private insertSegments(videoId: string, vtt: string, source: 'captions' | 'whisper'): void {
+    const segments = mergeCues(parseVtt(vtt));
+    const insert = this.db.prepare(
+      'INSERT INTO segments (video_id, start_ms, end_ms, text, source) VALUES (?, ?, ?, ?, ?)',
+    );
+    this.db.transaction(() => {
+      for (const s of segments) insert.run(videoId, s.startMs, s.endMs, s.text, source);
+    })();
+  }
+
   /** frames stage (download + scene-detect keyframes) then ocr stage. */
   private async runVisual(ref: VideoRef, videoDir: string, workDir: string): Promise<void> {
     this.setStage(ref.id, 'frames', 45);
@@ -215,7 +250,12 @@ export class IngestManager {
       videoPath = ref.source; // never deleted — the user's own file
     }
 
-    const frames = await extractFrames(videoPath, videoDir, this.config);
+    const duration = (
+      this.db.prepare('SELECT duration_s AS d FROM videos WHERE id = ?').get(ref.id) as {
+        d: number | null;
+      }
+    ).d;
+    const frames = await extractFrames(videoPath, videoDir, this.config, duration);
     if (ref.kind === 'youtube') rmSync(videoPath, { force: true }); // source media gone ASAP
 
     this.setStage(ref.id, 'ocr', 65);
