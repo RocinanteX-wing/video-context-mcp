@@ -25,6 +25,7 @@ export function handler(deps: Deps) {
   return async (args: { video_id: string; start?: string | number; end?: string | number }) => {
     try {
       const row = getVideoRow(deps.db, args.video_id);
+      deps.cache.touchVideo(row.id);
       const note = ingestStateNote(row, deps.ingest);
 
       const startMs = args.start !== undefined ? parseTimestamp(args.start) : 0;

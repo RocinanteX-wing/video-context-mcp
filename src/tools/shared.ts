@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { CacheManager } from '../cache.js';
 import type { Config } from '../config.js';
 import { VcmError } from '../errors.js';
 import type { IngestManager } from '../pipeline/ingest.js';
@@ -7,6 +8,7 @@ export interface Deps {
   db: Database.Database;
   config: Config;
   ingest: IngestManager;
+  cache: CacheManager;
 }
 
 export interface VideoRow {
@@ -24,6 +26,9 @@ export interface VideoRow {
   error_detail: string | null;
   opts_json: string;
   embedded_count: number | null;
+  last_accessed_at: string | null;
+  asset_bytes: number | null;
+  vector_bytes: number;
 }
 
 export function textResult(text: string): { content: { type: 'text'; text: string }[] } {

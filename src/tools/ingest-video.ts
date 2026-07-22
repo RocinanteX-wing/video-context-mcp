@@ -55,8 +55,8 @@ export function handler(deps: Deps) {
         cached: res.cached,
         already_running: res.alreadyRunning,
         next: res.cached
-          ? 'Video is already indexed. Use get_video_timeline / get_transcript / search_videos.'
-          : 'Ingestion started in the background. Poll get_ingest_status until stage=done.',
+          ? 'Video is already indexed. Query it, save the resulting note elsewhere, then call delete_video to release its assets.'
+          : 'Ingestion started in the background. Poll get_ingest_status until stage=done; after saving the resulting note elsewhere, call delete_video.',
       });
     } catch (err) {
       return toToolError(err);

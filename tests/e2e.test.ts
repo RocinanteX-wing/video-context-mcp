@@ -3,10 +3,11 @@
  * exercise timeline → transcript → search. Run with `just e2e` (sets VCM_E2E=1).
  * Uses the managed yt-dlp bootstrap and network access; skipped otherwise.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CacheManager } from '../src/cache.js';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import { IngestManager } from '../src/pipeline/ingest.js';
@@ -18,12 +19,14 @@ describe.skipIf(!process.env.VCM_E2E)('e2e: real YouTube ingest', () => {
   let dir: string;
   let db: ReturnType<typeof openDb>;
   let ingest: IngestManager;
+  let cache: CacheManager;
 
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'vcm-e2e-'));
     const config = loadConfig({ ...process.env, VCM_CACHE_DIR: dir });
     db = openDb(dir);
-    ingest = new IngestManager(db, config);
+    cache = new CacheManager(db, config);
+    ingest = new IngestManager(db, config, cache);
   });
 
   afterAll(() => {
@@ -58,5 +61,13 @@ describe.skipIf(!process.env.VCM_E2E)('e2e: real YouTube ingest', () => {
       )
       .get('elephants', VIDEO);
     expect(hit).toBeDefined();
+
+    const released = await cache.releaseVideo(VIDEO);
+    expect(released.cleanupPending).toBe(false);
+    expect(db.prepare('SELECT id FROM videos WHERE id = ?').get(VIDEO)).toBeUndefined();
+    expect(
+      db.prepare('SELECT rowid FROM segments_fts WHERE segments_fts MATCH ?').all('elephants'),
+    ).toHaveLength(0);
+    expect(existsSync(join(dir, VIDEO))).toBe(false);
   });
 });

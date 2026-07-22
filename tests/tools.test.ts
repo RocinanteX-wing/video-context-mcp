@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CacheManager } from '../src/cache.js';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import { IngestManager } from '../src/pipeline/ingest.js';
@@ -15,6 +16,8 @@ import * as getTranscript from '../src/tools/get-transcript.js';
 import * as getVideoTimeline from '../src/tools/get-video-timeline.js';
 import * as listVideos from '../src/tools/list-videos.js';
 import * as peekFrame from '../src/tools/peek-frame.js';
+import * as pruneCache from '../src/tools/prune-cache.js';
+import { filterLiveVectorHits } from '../src/tools/search-videos.js';
 import type { Deps } from '../src/tools/shared.js';
 
 const VID = 'vidPartial01';
@@ -35,7 +38,8 @@ describe('tool handlers on partial/seeded state', () => {
     dir = mkdtempSync(join(tmpdir(), 'vcm-tools-'));
     db = openDb(dir);
     const config = loadConfig({ VCM_CACHE_DIR: dir });
-    deps = { db, config, ingest: new IngestManager(db, config) };
+    const cache = new CacheManager(db, config);
+    deps = { db, config, ingest: new IngestManager(db, config, cache), cache };
     // Mid-ingest video: transcript landed, frames still processing.
     db.prepare(
       `INSERT INTO videos (id, kind, source_url, title, duration_s, captions_lang, captions_auto, stage)
@@ -52,11 +56,25 @@ describe('tool handlers on partial/seeded state', () => {
   });
 
   it('get_transcript serves partial results mid-ingest with a state note', async () => {
+    expect(
+      (
+        db.prepare('SELECT last_accessed_at AS t FROM videos WHERE id = ?').get(VID) as {
+          t: string | null;
+        }
+      ).t,
+    ).toBeNull();
     const res = await getTranscript.handler(deps)({ video_id: VID });
     const out = text(res as never);
     expect(out).toContain('early words available now');
     expect(out).toContain('ingest in progress (stage=frames');
     expect((res as { isError?: boolean }).isError).toBeUndefined();
+    expect(
+      (
+        db.prepare('SELECT last_accessed_at AS t FROM videos WHERE id = ?').get(VID) as {
+          t: string | null;
+        }
+      ).t,
+    ).not.toBeNull();
   });
 
   it('get_video_timeline serves metadata mid-ingest with a state note', async () => {
@@ -103,5 +121,21 @@ describe('tool handlers on partial/seeded state', () => {
     const listJson = JSON.parse(text(listed as never)) as Record<string, unknown>;
     expect(listJson).toHaveProperty('video_cache_gb');
     expect(listJson).toHaveProperty('runtime_cache_gb');
+    expect(listJson).toHaveProperty('budget_gb');
+    expect(listJson).toHaveProperty('cleanup_pending');
+
+    const preview = await pruneCache.handler(deps)({});
+    const previewJson = JSON.parse(text(preview as never)) as Record<string, unknown>;
+    expect(previewJson).toMatchObject({ dry_run: true, candidate_count: 0 });
+  });
+});
+
+describe('semantic cache cleanup filtering', () => {
+  it('removes stale vector rows before ranking', () => {
+    const hits = [
+      { video_id: 'deleted0001', id: 'seg-1' },
+      { video_id: 'liveVideo01', id: 'seg-2' },
+    ];
+    expect(filterLiveVectorHits(hits, new Set(['liveVideo01']), 8)).toEqual([hits[1]]);
   });
 });

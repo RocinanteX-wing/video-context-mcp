@@ -1,5 +1,3 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import { toToolError } from '../errors.js';
 import { formatMs } from '../utils/time.js';
 import { type Deps, jsonResult } from './shared.js';
@@ -8,19 +6,12 @@ export const name = 'list_videos';
 
 export const description =
   'List all videos in the local index with their ingest stage, transcript availability, and ' +
-  'disk usage. Warns when the cache exceeds the configured size cap (VCM_MAX_CACHE_GB).';
+  'retained usage. Reports the video LRU budget separately from reusable runtime/model data.';
 
 export const inputSchema = {};
 
-function dirSizeBytes(dir: string): number {
-  if (!existsSync(dir)) return 0;
-  let total = 0;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, entry.name);
-    if (entry.isDirectory()) total += dirSizeBytes(p);
-    else if (entry.isFile()) total += statSync(p).size;
-  }
-  return total;
+function gb(bytes: number): number {
+  return Math.round((bytes / 1024 ** 3) * 100) / 100;
 }
 
 export function handler(deps: Deps) {
@@ -42,8 +33,10 @@ export function handler(deps: Deps) {
         segments: number;
       }[];
 
+      const cache = deps.cache.snapshot(true);
+      const usageById = new Map(cache.videos.map((video) => [video.videoId, video]));
       const videos = rows.map((r) => {
-        const bytes = dirSizeBytes(join(deps.config.cacheDir, r.id));
+        const usage = usageById.get(r.id);
         return {
           video_id: r.id,
           title: r.title,
@@ -52,31 +45,27 @@ export function handler(deps: Deps) {
           duration: r.duration_s ? formatMs(r.duration_s * 1000) : null,
           segments: r.segments,
           error_code: r.error_code,
-          disk_mb: Math.round((bytes / 1024 / 1024) * 10) / 10,
+          disk_mb: Math.round(((usage?.retainedBytes ?? 0) / 1024 ** 2) * 10) / 10,
+          retained_mb: Math.round(((usage?.retainedBytes ?? 0) / 1024 ** 2) * 10) / 10,
+          last_accessed_at: usage?.lastAccessedAt ?? null,
+          eviction_eligible: usage?.evictionEligible ?? false,
         };
       });
 
-      // Whole-cache size: includes video dirs, whisper models, the SQLite
-      // index, and any orphans — not just directories with live rows.
-      const totalGb = dirSizeBytes(deps.config.cacheDir) / 1024 ** 3;
-      const videoBytes = videos.reduce(
-        (sum, video) => sum + dirSizeBytes(join(deps.config.cacheDir, video.video_id)),
-        0,
-      );
-      const runtimeBytes = ['runtime', 'models', 'transformers', 'tesseract'].reduce(
-        (sum, name) => sum + dirSizeBytes(join(deps.config.cacheDir, name)),
-        0,
-      );
       return jsonResult({
         count: videos.length,
         cache_dir: deps.config.cacheDir,
-        cache_gb: Math.round(totalGb * 100) / 100,
-        video_cache_gb: Math.round((videoBytes / 1024 ** 3) * 100) / 100,
-        runtime_cache_gb: Math.round((runtimeBytes / 1024 ** 3) * 100) / 100,
-        cache_warning:
-          totalGb > deps.config.maxCacheGb
-            ? `Cache exceeds VCM_MAX_CACHE_GB=${deps.config.maxCacheGb}. Consider delete_video on old entries; runtime/model data is reusable and shown separately.`
-            : null,
+        cache_gb: gb(cache.totalPhysicalBytes),
+        physical_cache_gb: gb(cache.totalPhysicalBytes),
+        video_cache_gb: gb(cache.videoBytes),
+        shared_cache_gb: gb(cache.sharedBytes),
+        runtime_cache_gb: gb(cache.sharedBytes),
+        index_cache_gb: gb(cache.indexPhysicalBytes),
+        budget_gb: gb(cache.budgetBytes),
+        low_water_gb: gb(cache.lowWaterBytes),
+        cleanup_pending: cache.cleanupPending,
+        over_budget: cache.videoBytes > cache.budgetBytes,
+        cache_warning: deps.cache.warning(),
         videos,
       });
     } catch (err) {

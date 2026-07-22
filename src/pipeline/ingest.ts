@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type Database from 'better-sqlite3';
+import { CacheManager } from '../cache.js';
 import type { Config } from '../config.js';
 import { VcmError } from '../errors.js';
 import type { VideoRef } from '../ids.js';
@@ -55,6 +56,7 @@ export class IngestManager {
   constructor(
     private db: Database.Database,
     private config: Config,
+    private cache = new CacheManager(db, config),
   ) {
     this.runtime = new RuntimeManager(config);
   }
@@ -68,11 +70,10 @@ export class IngestManager {
    */
   start(input: string, opts: IngestOptions = {}): StartResult {
     const ref = resolveRef(input);
-    const row = this.db.prepare('SELECT stage FROM videos WHERE id = ?').get(ref.id) as
-      | { stage: string }
-      | undefined;
-
     if (this.running.has(ref.id)) {
+      const row = this.db.prepare('SELECT stage FROM videos WHERE id = ?').get(ref.id) as
+        | { stage: string }
+        | undefined;
       return {
         videoId: ref.id,
         stage: row?.stage ?? 'pending',
@@ -80,30 +81,56 @@ export class IngestManager {
         alreadyRunning: true,
       };
     }
-    if (row?.stage === 'done' && !opts.force) {
-      return { videoId: ref.id, stage: 'done', cached: true, alreadyRunning: false };
-    }
 
     const now = new Date().toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO videos (id, kind, source_url, stage, opts_json)
-         VALUES (?, ?, ?, 'pending', ?)
-         ON CONFLICT(id) DO UPDATE SET
-           stage = 'pending', error_code = NULL, error_detail = NULL,
-           kind = excluded.kind, source_url = excluded.source_url,
-           opts_json = excluded.opts_json`,
-      )
-      .run(ref.id, ref.kind, ref.source, JSON.stringify(opts));
-    this.db
-      .prepare(
-        `INSERT INTO jobs (video_id, stage, progress_pct, progress_detail, updated_at)
-         VALUES (?, 'pending', 0, NULL, ?)
-         ON CONFLICT(video_id) DO UPDATE SET
-           stage = 'pending', progress_pct = 0, progress_detail = NULL,
-           updated_at = excluded.updated_at`,
-      )
-      .run(ref.id, now);
+    const existing = this.db
+      .transaction((): StartResult | null => {
+        if (this.cache.hasPendingGc(ref.id)) {
+          throw new VcmError(
+            'STAGE_NOT_READY',
+            `Cleanup is still finishing for ${ref.id}. Retry ingest_video after prune_cache reports cleanup_pending=0.`,
+          );
+        }
+        const row = this.db.prepare('SELECT stage FROM videos WHERE id = ?').get(ref.id) as
+          | { stage: string }
+          | undefined;
+        if (row?.stage === 'done' && !opts.force) {
+          return { videoId: ref.id, stage: 'done', cached: true, alreadyRunning: false };
+        }
+        if (row && !['done', 'error'].includes(row.stage)) {
+          return {
+            videoId: ref.id,
+            stage: row.stage,
+            cached: false,
+            alreadyRunning: true,
+          };
+        }
+        this.db
+          .prepare(
+            `INSERT INTO videos (id, kind, source_url, stage, opts_json)
+             VALUES (?, ?, ?, 'pending', ?)
+             ON CONFLICT(id) DO UPDATE SET
+               stage = 'pending', error_code = NULL, error_detail = NULL,
+               kind = excluded.kind, source_url = excluded.source_url,
+               opts_json = excluded.opts_json`,
+          )
+          .run(ref.id, ref.kind, ref.source, JSON.stringify(opts));
+        this.db
+          .prepare(
+            `INSERT INTO jobs (video_id, stage, progress_pct, progress_detail, updated_at)
+             VALUES (?, 'pending', 0, NULL, ?)
+             ON CONFLICT(video_id) DO UPDATE SET
+               stage = 'pending', progress_pct = 0, progress_detail = NULL,
+               updated_at = excluded.updated_at`,
+          )
+          .run(ref.id, now);
+        return null;
+      })
+      .immediate();
+    if (existing) {
+      if (existing.cached) this.cache.touchVideo(ref.id);
+      return existing;
+    }
 
     const job = this.withSlot(() => this.run(ref, opts))
       .catch((err) => {
@@ -118,6 +145,10 @@ export class IngestManager {
 
   isRunning(videoId: string): boolean {
     return this.running.has(videoId);
+  }
+
+  runningIds(): string[] {
+    return [...this.running.keys()];
   }
 
   /** Await all in-flight jobs (used by tests). */
@@ -206,6 +237,7 @@ export class IngestManager {
     const videoDir = join(this.config.cacheDir, ref.id);
     const workDir = join(videoDir, 'tmp');
     try {
+      await this.cache.maintain({ reason: 'pre_ingest', protectIds: this.runningIds() });
       this.setStage(ref.id, 'setup', 1, 'Resolving the managed runtime');
       const needed = new Set<'ytdlp' | 'ffmpeg' | 'ffprobe'>();
       if (ref.kind === 'youtube') needed.add('ytdlp');
@@ -299,8 +331,10 @@ export class IngestManager {
         try {
           // Dynamic import: the ONNX runtime stays unloaded unless needed.
           const { embedVideo } = await import('./embed.js');
-          const count = await embedVideo(this.db, ref.id, this.config);
-          this.db.prepare('UPDATE videos SET embedded_count = ? WHERE id = ?').run(count, ref.id);
+          const stats = await embedVideo(this.db, ref.id, this.config);
+          this.db
+            .prepare('UPDATE videos SET embedded_count = ?, vector_bytes = ? WHERE id = ?')
+            .run(stats.count, stats.vectorBytes, ref.id);
         } catch (err) {
           warn(
             err instanceof VcmError
@@ -314,9 +348,10 @@ export class IngestManager {
       const now = new Date().toISOString();
       this.db
         .prepare(
-          "UPDATE videos SET stage = 'done', ingested_at = ?, error_code = ?, error_detail = ? WHERE id = ?",
+          "UPDATE videos SET stage = 'done', ingested_at = ?, last_accessed_at = ?, error_code = ?, error_detail = ? WHERE id = ?",
         )
         .run(
+          now,
           now,
           warnings[0]?.code ?? null,
           warnings.length > 0 ? warnings.map((w) => `[${w.code}] ${w.message}`).join(' | ') : null,
@@ -334,6 +369,17 @@ export class IngestManager {
       this.setProgress(ref.id, 'error', 0);
     } finally {
       safeRm(workDir);
+      try {
+        this.cache.refreshVideoUsage(ref.id);
+        await this.cache.maintain({
+          reason: 'post_ingest',
+          protectIds: new Set([...this.runningIds(), ref.id]),
+        });
+      } catch (err) {
+        console.error(
+          `[video-context-mcp] cache maintenance after ${ref.id} failed: ${err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)}`,
+        );
+      }
     }
   }
 

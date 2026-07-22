@@ -27,6 +27,14 @@ interface Hit {
   display: string;
 }
 
+export function filterLiveVectorHits<T extends { video_id: string }>(
+  hits: T[],
+  liveVideoIds: ReadonlySet<string>,
+  limit: number,
+): T[] {
+  return hits.filter((hit) => liveVideoIds.has(hit.video_id)).slice(0, limit);
+}
+
 export function handler(deps: Deps) {
   return async (args: { query: string; video_id?: string; limit?: number }) => {
     try {
@@ -98,10 +106,22 @@ export function handler(deps: Deps) {
         const embed = await import('../pipeline/embed.js');
         if (await embed.hasVectors(deps.config)) {
           const [queryVec] = await embed.embedTexts([args.query], deps.config);
-          const hits = await embed.searchVectors(queryVec!, perList, deps.config, args.video_id);
+          const hits = await embed.searchVectors(
+            queryVec!,
+            perList * 4,
+            deps.config,
+            args.video_id,
+          );
+          const liveIds = new Set(
+            (
+              deps.db.prepare('SELECT id FROM videos').all() as {
+                id: string;
+              }[]
+            ).map((row) => row.id),
+          );
           const titleStmt = deps.db.prepare('SELECT title FROM videos WHERE id = ?');
           lists.push(
-            hits.map((h) => ({
+            filterLiveVectorHits(hits, liveIds, perList).map((h) => ({
               key: h.id,
               item: {
                 video_id: h.video_id,
@@ -124,6 +144,9 @@ export function handler(deps: Deps) {
         return textResult(
           `No matches for "${args.query}"${args.video_id ? ` in ${args.video_id}` : ''}. Only ingested videos are searchable (speech needs captions or whisper, screen text needs visual indexing) — check list_videos.${semanticNote ? `\n${semanticNote}` : ''}`,
         );
+      }
+      for (const videoId of new Set(fused.map((hit) => hit.item.video_id))) {
+        deps.cache.touchVideo(videoId);
       }
       const lines = fused.map(
         (f) =>

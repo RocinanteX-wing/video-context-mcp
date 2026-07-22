@@ -22,6 +22,7 @@ export function handler(deps: Deps) {
   return async (args: { video_id: string }) => {
     try {
       const row = getVideoRow(deps.db, args.video_id);
+      deps.cache.touchVideo(row.id);
       const note = ingestStateNote(row, deps.ingest);
       if (row.title === null) {
         // Nothing usable yet — not even metadata has landed.

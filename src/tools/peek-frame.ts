@@ -38,6 +38,7 @@ export function handler(deps: Deps) {
   return async (args: { video_id: string; timestamp: string | number; return_image?: boolean }) => {
     try {
       const row = getVideoRow(deps.db, args.video_id);
+      deps.cache.touchVideo(row.id);
       const note = ingestStateNote(row, deps.ingest);
       const tsMs = parseTimestamp(args.timestamp);
       const frame = nearestFrame(deps.db, row.id, tsMs);

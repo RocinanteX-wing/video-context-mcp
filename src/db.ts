@@ -170,6 +170,31 @@ function migrate(db: Database.Database): void {
       db.pragma('user_version = 5');
     })();
   }
+  if (version < 6) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE videos ADD COLUMN last_accessed_at TEXT;
+        ALTER TABLE videos ADD COLUMN asset_bytes INTEGER;
+        ALTER TABLE videos ADD COLUMN vector_bytes INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX idx_videos_lru
+          ON videos(stage, last_accessed_at, ingested_at);
+
+        CREATE TABLE cache_gc (
+          video_id TEXT PRIMARY KEY,
+          title TEXT,
+          reason TEXT NOT NULL,
+          files_pending INTEGER NOT NULL DEFAULT 1,
+          vectors_pending INTEGER NOT NULL DEFAULT 1,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          claimed_by TEXT,
+          lease_until_ms INTEGER
+        );
+      `);
+      db.pragma('user_version = 6');
+    })();
+  }
 }
 
 /**

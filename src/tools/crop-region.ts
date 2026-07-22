@@ -53,6 +53,7 @@ export function handler(deps: Deps) {
         );
       }
       const row = getVideoRow(deps.db, args.video_id);
+      deps.cache.touchVideo(row.id);
       const note = ingestStateNote(row, deps.ingest);
       const tsMs = parseTimestamp(args.timestamp);
       const frame = nearestFrame(deps.db, row.id, tsMs);

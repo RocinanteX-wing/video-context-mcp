@@ -86,6 +86,8 @@ export function handler(deps: Deps) {
             : `${source}, so transcript/search are empty. Re-ingest with whisper_fallback=true (and force=true) to transcribe locally with whisper.`,
         );
       }
+      const cacheWarning = deps.cache.warning(row.id);
+      if (cacheWarning) notes.push(cacheWarning);
 
       return jsonResult({
         video_id: row.id,
@@ -112,6 +114,11 @@ export function handler(deps: Deps) {
               .get(args.video_id) as { source: string } | undefined
           )?.source ?? null,
         error: row.error_code ? { code: row.error_code, detail: row.error_detail } : null,
+        cache_warning: cacheWarning,
+        release_when_done:
+          row.stage === 'done'
+            ? 'After saving the resulting note outside this MCP, call delete_video to release the retained video assets.'
+            : null,
         notes,
       });
     } catch (err) {

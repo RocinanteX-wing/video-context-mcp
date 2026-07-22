@@ -33,6 +33,11 @@ export interface VectorHit {
   text: string;
 }
 
+export interface EmbedStats {
+  count: number;
+  vectorBytes: number;
+}
+
 /** Pure doc builder (unit-tested): what gets embedded for a video. */
 export function buildEmbedDocs(
   segments: { id: number; start_ms: number; text: string }[],
@@ -128,6 +133,25 @@ export async function replaceVideoVectors(
   if (rows.length > 0) await table.add(rows);
 }
 
+/** Remove a video's semantic rows. Safe to repeat and a no-op before first embed. */
+export async function deleteVideoVectors(videoId: string, config: Config): Promise<void> {
+  assertSafeId(videoId);
+  const db = await connect(config);
+  const names = await db.tableNames();
+  if (!names.includes(TABLE)) return;
+  const table = await db.openTable(TABLE);
+  await table.delete(`video_id = '${videoId}'`);
+}
+
+/** Compact deleted rows and prune old table versions so disk is actually reclaimed. */
+export async function optimizeVectors(config: Config): Promise<void> {
+  const db = await connect(config);
+  const names = await db.tableNames();
+  if (!names.includes(TABLE)) return;
+  const table = await db.openTable(TABLE);
+  await table.optimize({ cleanupOlderThan: new Date() });
+}
+
 /** Cheap existence check so search never loads the model pointlessly. */
 export async function hasVectors(config: Config): Promise<boolean> {
   try {
@@ -169,7 +193,7 @@ export async function embedVideo(
   db: Database.Database,
   videoId: string,
   config: Config,
-): Promise<number> {
+): Promise<EmbedStats> {
   const segments = db
     .prepare('SELECT id, start_ms, text FROM segments WHERE video_id = ? ORDER BY start_ms')
     .all(videoId) as { id: number; start_ms: number; text: string }[];
@@ -183,12 +207,17 @@ export async function embedVideo(
   const docs = buildEmbedDocs(segments, frames);
   if (docs.length === 0) {
     await replaceVideoVectors(videoId, [], [], config);
-    return 0;
+    return { count: 0, vectorBytes: 0 };
   }
   const vectors = await embedTexts(
     docs.map((d) => d.text),
     config,
   );
   await replaceVideoVectors(videoId, docs, vectors, config);
-  return docs.length;
+  const vectorBytes = vectors.reduce(
+    (total, vector, index) =>
+      total + vector.length * Float32Array.BYTES_PER_ELEMENT + Buffer.byteLength(docs[index]!.text),
+    0,
+  );
+  return { count: docs.length, vectorBytes };
 }

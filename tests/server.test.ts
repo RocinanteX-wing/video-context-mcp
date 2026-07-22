@@ -49,6 +49,7 @@ describe('MCP server over stdio', () => {
       'ingest_video',
       'list_videos',
       'peek_frame',
+      'prune_cache',
       'search_videos',
     ]);
   });

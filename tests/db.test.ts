@@ -28,27 +28,47 @@ describe('db', () => {
   }
 
   it('migrates a fresh database and is idempotent on reopen', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    expect(db.pragma('user_version', { simple: true })).toBe(6);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
-    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    expect(db.pragma('user_version', { simple: true })).toBe(6);
     const columns = db.pragma('table_info(jobs)') as { name: string }[];
     expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
+    const videoColumns = db.pragma('table_info(videos)') as { name: string }[];
+    expect(videoColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['last_accessed_at', 'asset_bytes', 'vector_bytes']),
+    );
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='cache_gc'").get(),
+    ).toBeDefined();
   });
 
-  it('upgrades an existing v4 jobs table in place', () => {
+  it('upgrades an existing v4 database through cache lifecycle v6', () => {
     db.close();
+    rmSync(join(dir, 'index.sqlite'), { force: true });
     const legacy = new Database(join(dir, 'index.sqlite'));
-    legacy.exec(
-      'DROP TABLE IF EXISTS jobs; CREATE TABLE jobs (video_id TEXT PRIMARY KEY, stage TEXT NOT NULL, progress_pct REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);',
-    );
+    legacy.exec(`
+      CREATE TABLE videos (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, source_url TEXT NOT NULL,
+        title TEXT, channel TEXT, duration_s REAL, captions_lang TEXT,
+        captions_auto INTEGER, ingested_at TEXT, stage TEXT NOT NULL DEFAULT 'pending',
+        error_code TEXT, error_detail TEXT, opts_json TEXT NOT NULL DEFAULT '{}',
+        embedded_count INTEGER
+      );
+      CREATE TABLE jobs (
+        video_id TEXT PRIMARY KEY, stage TEXT NOT NULL,
+        progress_pct REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+      );
+    `);
     legacy.pragma('user_version = 4');
     legacy.close();
 
     db = openDb(dir);
-    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    expect(db.pragma('user_version', { simple: true })).toBe(6);
     const columns = db.pragma('table_info(jobs)') as { name: string }[];
     expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
+    const videoColumns = db.pragma('table_info(videos)') as { name: string }[];
+    expect(videoColumns.some((column) => column.name === 'last_accessed_at')).toBe(true);
   });
 
   it('FTS rebuild makes pre-trigger rows searchable (migration v3 mechanism)', () => {

@@ -8,6 +8,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { CacheManager } from './cache.js';
 import { runCli } from './cli.js';
 import { loadConfig } from './config.js';
 import { markInterruptedJobs, openDb } from './db.js';
@@ -20,6 +21,7 @@ import * as getVideoTimeline from './tools/get-video-timeline.js';
 import * as ingestVideo from './tools/ingest-video.js';
 import * as listVideos from './tools/list-videos.js';
 import * as peekFrame from './tools/peek-frame.js';
+import * as pruneCache from './tools/prune-cache.js';
 import * as searchVideos from './tools/search-videos.js';
 import type { Deps } from './tools/shared.js';
 import { SERVER_NAME, VERSION } from './version.js';
@@ -36,6 +38,7 @@ export function buildServer(deps: Deps): McpServer {
     cropRegion,
     listVideos,
     deleteVideo,
+    pruneCache,
   ]) {
     server.registerTool(
       tool.name,
@@ -59,10 +62,17 @@ async function main(): Promise<void> {
   if (interrupted > 0) {
     console.error(`[${SERVER_NAME}] marked ${interrupted} interrupted ingest job(s) as error`);
   }
-  const deps: Deps = { db, config, ingest: new IngestManager(db, config) };
+  const cache = new CacheManager(db, config);
+  const ingest = new IngestManager(db, config, cache);
+  const deps: Deps = { db, config, ingest, cache };
   const server = buildServer(deps);
   await server.connect(new StdioServerTransport());
   console.error(`[${SERVER_NAME}] v${VERSION} ready (cache: ${config.cacheDir})`);
+  void cache.maintain({ reason: 'startup', protectIds: ingest.runningIds() }).catch((err) => {
+    console.error(
+      `[${SERVER_NAME}] startup cache maintenance failed: ${err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)}`,
+    );
+  });
 }
 
 main().catch((err) => {
