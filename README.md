@@ -2,15 +2,18 @@
 
 Model-agnostic MCP server that turns videos into an **interactive, queryable knowledge structure** — transcript, chapters, keyframes, OCR, and search — that any MCP client model (Claude, GPT, Gemini, local models) can **scrub lazily** instead of receiving a context-flooding dump of keyframes.
 
-Most video tools for agents either lock you to one model provider or eagerly dump dozens of frames into context. `video-context-mcp` treats a video like a filesystem: ingest once, then let the agent pull exactly the slice it needs — a timeline overview, a transcript range, a search hit, (soon) a single frame at a timestamp.
+Most video tools for agents either lock you to one model provider or eagerly dump dozens of frames into context. `video-context-mcp` treats a video like a filesystem: ingest once, then let the agent pull exactly the slice it needs — a timeline overview, a transcript range, a search hit, or a single frame at a timestamp.
 
 ## Requirements
 
-- Node ≥ 20
-- [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on PATH (YouTube ingestion)
-- `ffmpeg`/`ffprobe` on PATH (keyframe extraction, local files)
-- `tesseract` on PATH (on-screen text OCR; visual indexing degrades gracefully without it)
-- `whisper-cli` (whisper.cpp) on PATH for `whisper_fallback` ASR on caption-less videos — the ggml model auto-downloads (~148 MB) on first use, or point `VCM_WHISPER_MODEL` at your own
+- Node ≥ 22
+- Network access on first use
+
+No Python, package manager, or preinstalled media tools are required on macOS
+(Apple Silicon or Intel), Windows x64, or Linux glibc x64. The server securely
+downloads pinned yt-dlp and FFmpeg builds only when a feature needs them, then
+caches them under `VCM_CACHE_DIR`. OCR and caption-less speech use local
+Tesseract.js and Transformers.js fallbacks when native tools are unavailable.
 
 ## Install & register
 
@@ -45,6 +48,15 @@ args = ["/path/to/video-context-mcp/dist/index.js"]
 
 Once published to npm, `npm install -g @smallthinkingmachines/video-context-mcp` will provide a `video-context-mcp` binary you can use as the `command` directly.
 
+Optional bootstrap and diagnostics:
+
+```bash
+video-context-mcp setup          # prefetch yt-dlp + FFmpeg
+video-context-mcp setup --all    # also prefetch OCR, ASR, and embedding models
+video-context-mcp setup --update # explicitly activate this release's pinned tools
+video-context-mcp doctor         # read-only health and remediation report
+```
+
 ## Tools
 
 | Tool | Purpose |
@@ -62,19 +74,30 @@ Typical agent flow: `ingest_video` → poll `get_ingest_status` → `get_video_t
 
 ## Configuration
 
-All optional (see `.env.example`): `VCM_CACHE_DIR` (default `~/.cache/video-context-mcp`), `YTDLP_COOKIES_FILE` (for age-restricted/members-only videos or YouTube bot checks — export from a logged-in browser), `VCM_MAX_CACHE_GB`, `VCM_YTDLP_BIN`, `VCM_FFMPEG_BIN`, `VCM_FFPROBE_BIN`.
+All settings are optional; see `.env.example`. Managed tools are the default.
+Set `VCM_TOOLCHAIN_MODE=system` to restore PATH-only resolution. An explicit
+`VCM_YTDLP_BIN`, `VCM_FFMPEG_BIN`, or `VCM_FFPROBE_BIN` always wins. OCR and
+ASR providers can be selected with `VCM_OCR_BACKEND` and `VCM_ASR_BACKEND`.
+Cookies for restricted YouTube videos remain user-supplied through
+`YTDLP_COOKIES_FILE` and are never bundled.
 
 ## Roadmap
 
 - **Phase 1 (shipped):** metadata + captions transcript + timeline + FTS search
-- **Phase 2 (shipped):** keyframes (ffmpeg scene detection), `peek_frame` / `crop_region` returning images the *client* model interprets (stays model-agnostic), tesseract OCR into search. Known limitation: YouTube's SABR streaming experiment can cap downloads at 360p, degrading code OCR — surfaced as a note in `get_ingest_status`.
-- **Phase 3 (shipped):** local whisper fallback — `ingest_video(…, whisper_fallback=true)` transcribes caption-less videos (and local files) with whisper.cpp; ASR failures downgrade to warnings without sinking the ingest
-- **Phase 4 (this release):** hybrid dense+lexical search — ONNX embeddings (`Xenova/all-MiniLM-L6-v2` by default, ~25 MB auto-download, override via `VCM_EMBED_MODEL`) in LanceDB, fused with FTS5 by reciprocal rank. Paraphrase queries ("how do they avoid memory bugs") now match; degrades gracefully to FTS-only if the model is unavailable
-- **Phase 5 (experimental):** on-screen code diff reconstruction, diagram→Mermaid, deictic alignment
+- **Phase 2 (shipped):** keyframes, lazy frame inspection, and native/WASM OCR into search. Known limitation: YouTube's SABR streaming experiment can cap downloads at 360p, degrading code OCR — surfaced as a note in `get_ingest_status`.
+- **Phase 3 (shipped):** local ASR fallback — `ingest_video(…, whisper_fallback=true)` uses native whisper.cpp when explicitly configured or quantized Transformers.js Base.en otherwise; failures downgrade to warnings without sinking the ingest
+- **Phase 4 (shipped):** hybrid dense+lexical search — ONNX embeddings (`Xenova/all-MiniLM-L6-v2` by default) in LanceDB, fused with FTS5 by reciprocal rank
+- **Phase 5 (this release):** self-contained, checksummed runtime provisioning with setup/doctor commands and four-platform package validation
+- **Phase 6 (experimental):** on-screen code diff reconstruction, diagram→Mermaid, deictic alignment
 
 ## Notes
 
 Intended for personal research and note-taking on content you can legitimately access. Caption/metadata fetching uses `yt-dlp`; respect YouTube's Terms of Service and copyright. Cookies are user-supplied and never bundled.
+
+Managed executables retain their upstream licenses; see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). The npm package stays small:
+runtime binaries and models are downloaded into the disposable cache, not
+embedded in the tarball.
 
 **Trust boundary:** the server trusts its MCP client. In particular, `ingest_video` will read any local file path the client asks for (by design — it's your agent indexing your files), and the cache is plain files on disk. Run it as a local stdio server for clients you control; do not expose it to untrusted clients or over the network without adding your own authorization layer.
 

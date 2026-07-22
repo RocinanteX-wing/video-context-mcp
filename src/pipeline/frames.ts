@@ -97,13 +97,15 @@ async function runFfmpeg(args: string[], config: Config, timeoutMs: number): Pro
         `ffmpeg timed out after ${Math.round(timeoutMs / 60000)} min and was killed.`,
       );
     }
-    const tail = (e.stderr ?? e.message ?? '')
-      .trim()
-      .split('\n')
-      .slice(-3)
-      .join(' | ')
-      .slice(0, 400);
-    throw new VcmError('VISUAL_FAILED', `ffmpeg frame extraction failed: ${tail}`);
+    if (
+      /nothing was (encoded|written)|received no packets|Output file is empty/i.test(e.stderr ?? '')
+    ) {
+      throw new VcmError('VISUAL_FAILED', 'FFmpeg produced no frames from this selection.');
+    }
+    throw new VcmError(
+      'VISUAL_FAILED',
+      'FFmpeg could not extract frames from this media. The file may be corrupt or use an unsupported codec; run video-context-mcp doctor and retry.',
+    );
   }
 }
 
@@ -147,10 +149,7 @@ async function extractPass(
     // "Output file is empty, nothing was encoded" (≤v7) or "Nothing was
     // written into output file … received no packets" (v8+). That is a valid
     // outcome (static video) — signal zero frames so the caller can fall back.
-    if (
-      err instanceof VcmError &&
-      /nothing was (encoded|written)|received no packets|Output file is empty/i.test(err.message)
-    ) {
+    if (err instanceof VcmError && /produced no frames/i.test(err.message)) {
       return [];
     }
     throw err;

@@ -17,6 +17,11 @@ export type ErrorCode =
   | 'NOT_INGESTED'
   | 'STAGE_NOT_READY'
   | 'BINARY_MISSING'
+  | 'TOOLCHAIN_UNSUPPORTED'
+  | 'TOOLCHAIN_DOWNLOAD_FAILED'
+  | 'TOOLCHAIN_INTEGRITY_FAILED'
+  | 'TOOLCHAIN_UNUSABLE'
+  | 'INSUFFICIENT_DISK'
   | 'INGEST_INTERRUPTED'
   | 'NETWORK'
   | 'VISUAL_FAILED'
@@ -107,8 +112,10 @@ export function classifyYtdlpFailure(
       return new VcmError(rule.code, rule.message(cookiesConfigured));
     }
   }
-  const tail = stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 500);
-  return new VcmError('YTDLP_FAILED', `yt-dlp failed: ${tail || 'unknown error'}`);
+  return new VcmError(
+    'YTDLP_FAILED',
+    'yt-dlp failed for an unrecognized reason. Run video-context-mcp doctor, update the managed runtime, and retry; configure YTDLP_COOKIES_FILE if the video requires a signed-in session.',
+  );
 }
 
 /** Format any thrown value into an MCP tool error payload (always bounded). */

@@ -39,9 +39,11 @@ describe('classifyYtdlpFailure', () => {
     expect(err.message).toContain('VCM_YTDLP_BIN');
   });
 
-  it('falls back to YTDLP_FAILED with a bounded stderr tail', () => {
+  it('falls back to YTDLP_FAILED without exposing raw stderr', () => {
     const err = classifyYtdlpFailure(`line1\nline2\n${'x'.repeat(2000)}`, false);
     expect(err.code).toBe('YTDLP_FAILED');
     expect(err.message.length).toBeLessThan(600);
+    expect(err.message).not.toContain('line2');
+    expect(err.message).not.toContain('xxx');
   });
 });

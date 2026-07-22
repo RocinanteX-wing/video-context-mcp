@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
-import { resolve as resolvePath } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, resolve as resolvePath } from 'node:path';
 import { VcmError } from './errors.js';
 
 export interface VideoRef {
@@ -54,9 +55,15 @@ export function resolveRef(input: string): VideoRef {
 
   // Local file path (absolute, relative, or ~)
   const looksLikePath =
-    trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('~/');
+    isAbsolute(trimmed) ||
+    /^[A-Za-z]:[\\/]/.test(trimmed) ||
+    trimmed.startsWith('./') ||
+    trimmed.startsWith('.\\') ||
+    trimmed.startsWith('~/') ||
+    trimmed.startsWith('~\\');
   if (looksLikePath) {
-    const abs = resolvePath(trimmed.replace(/^~\//, `${process.env.HOME}/`));
+    const expanded = trimmed.replace(/^~[\\/]/, `${homedir()}/`);
+    const abs = resolvePath(expanded);
     if (!existsSync(abs)) {
       throw new VcmError('FILE_NOT_FOUND', `Local file not found: ${abs}`);
     }

@@ -5,7 +5,10 @@
  * optional enrichment).
  */
 import { execFile } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
+import type { Worker } from 'tesseract.js';
 import type { Config } from '../config.js';
 import { VcmError } from '../errors.js';
 
@@ -14,6 +17,10 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 
 const MIN_WORD_CONF = 30;
 const MIN_LINE_CONF = 40;
+const nativeAvailability = new Map<string, Promise<boolean>>();
+let wasmWorker: Promise<Worker> | null = null;
+let wasmCacheDir = '';
+let wasmQueue: Promise<void> = Promise.resolve();
 
 export interface OcrBlock {
   text: string;
@@ -85,8 +92,18 @@ export function classifyFrame(blocks: OcrBlock[]): FrameClass {
   return codeHits >= 3 ? 'code' : 'slide';
 }
 
-/** Run tesseract on one frame image; returns line blocks (possibly empty). */
-export async function ocrFrame(imagePath: string, config: Config): Promise<OcrBlock[]> {
+async function nativeAvailable(binary: string): Promise<boolean> {
+  let probe = nativeAvailability.get(binary);
+  if (!probe) {
+    probe = execFileAsync(binary, ['--version'], { timeout: 10_000, windowsHide: true })
+      .then(() => true)
+      .catch(() => false);
+    nativeAvailability.set(binary, probe);
+  }
+  return probe;
+}
+
+async function ocrNative(imagePath: string, config: Config): Promise<OcrBlock[]> {
   try {
     const { stdout } = await execFileAsync(
       config.tesseractBin,
@@ -105,4 +122,85 @@ export async function ocrFrame(imagePath: string, config: Config): Promise<OcrBl
     // A single unreadable frame should not sink the whole visual stage.
     return [];
   }
+}
+
+async function getWasmWorker(config: Config): Promise<Worker> {
+  const cacheDir = join(config.cacheDir, 'tesseract');
+  if (wasmWorker && wasmCacheDir === cacheDir) return wasmWorker;
+  if (wasmWorker) {
+    const previous = await wasmWorker.catch(() => null);
+    await previous?.terminate().catch(() => undefined);
+  }
+  mkdirSync(cacheDir, { recursive: true });
+  wasmCacheDir = cacheDir;
+  wasmWorker = import('tesseract.js')
+    .then(({ createWorker, OEM }) =>
+      createWorker('eng', OEM.LSTM_ONLY, {
+        cachePath: cacheDir,
+        logger: (message) => {
+          if (message.status === 'recognizing text') return;
+          console.error(
+            `[video-context-mcp] tesseract.js: ${message.status} ${Math.round(message.progress * 100)}%`,
+          );
+        },
+      }),
+    )
+    .catch((err) => {
+      wasmWorker = null;
+      throw new VcmError(
+        'VISUAL_FAILED',
+        `Could not initialize the self-contained OCR model (${err instanceof Error ? err.message.slice(0, 200) : err}). Check network access or run video-context-mcp setup --all.`,
+      );
+    });
+  return wasmWorker;
+}
+
+async function ocrWasm(imagePath: string, config: Config): Promise<OcrBlock[]> {
+  let resolveTurn: (() => void) | undefined;
+  const previous = wasmQueue;
+  wasmQueue = new Promise<void>((resolve) => {
+    resolveTurn = resolve;
+  });
+  await previous;
+  try {
+    const worker = await getWasmWorker(config);
+    const { data } = await worker.recognize(imagePath, {}, { blocks: true, text: false });
+    const lines =
+      data.blocks?.flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines)) ??
+      [];
+    return lines
+      .filter((line) => line.text.trim().length >= 2 && line.confidence >= MIN_LINE_CONF)
+      .map((line) => ({
+        text: line.text.trim(),
+        bbox: [line.bbox.x0, line.bbox.y0, line.bbox.x1, line.bbox.y1],
+        conf: Math.round(line.confidence),
+      }));
+  } catch (err) {
+    if (err instanceof VcmError) throw err;
+    throw new VcmError(
+      'VISUAL_FAILED',
+      `Self-contained OCR failed (${err instanceof Error ? err.message.slice(0, 200) : err}). Run video-context-mcp doctor or set VCM_TESSERACT_BIN.`,
+    );
+  } finally {
+    resolveTurn?.();
+  }
+}
+
+export async function warmOcr(config: Config, dispose = false): Promise<void> {
+  const worker = await getWasmWorker(config);
+  if (dispose) {
+    await worker.terminate();
+    wasmWorker = null;
+    wasmCacheDir = '';
+  }
+}
+
+/** Run the selected native or WASM OCR provider on one frame. */
+export async function ocrFrame(imagePath: string, config: Config): Promise<OcrBlock[]> {
+  if (config.ocrBackend === 'wasm') return ocrWasm(imagePath, config);
+  if (config.ocrBackend === 'native') return ocrNative(imagePath, config);
+  if (config.binaryOverrides.tesseract) return ocrNative(imagePath, config);
+  return (await nativeAvailable(config.tesseractBin))
+    ? ocrNative(imagePath, config)
+    : ocrWasm(imagePath, config);
 }

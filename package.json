@@ -1,6 +1,6 @@
 {
   "name": "@smallthinkingmachines/video-context-mcp",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "description": "Model-agnostic MCP server that turns videos into an interactive, queryable knowledge structure — transcript, keyframes, OCR, and search that any MCP client can scrub lazily",
   "type": "module",
   "main": "dist/index.js",
@@ -15,7 +15,7 @@
   "bugs": {
     "url": "https://github.com/smallthinkingmachines/video-context-mcp/issues"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
@@ -25,7 +25,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rm -rf dist coverage",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "keywords": [
     "mcp-server",
@@ -42,7 +42,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
@@ -50,12 +50,15 @@
     "@modelcontextprotocol/sdk": "^1.25.0",
     "apache-arrow": "^18.1.0",
     "better-sqlite3": "^12.6.2",
+    "tesseract.js": "^7.0.0",
+    "unzipper": "^0.12.5",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.0",
+    "@types/unzipper": "^0.10.11",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

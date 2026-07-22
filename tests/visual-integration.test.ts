@@ -82,6 +82,7 @@ describe.skipIf(!hasFfmpeg())('visual pipeline (real ffmpeg)', () => {
     async () => {
       const config = loadConfig({
         VCM_CACHE_DIR: dir,
+        VCM_TOOLCHAIN_MODE: 'system',
         VCM_MIN_FRAME_GAP_S: '2',
         VCM_TESSERACT_BIN: '/nonexistent/vcm-test-tesseract',
       });

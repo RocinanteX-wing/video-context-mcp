@@ -8,6 +8,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { runCli } from './cli.js';
 import { loadConfig } from './config.js';
 import { markInterruptedJobs, openDb } from './db.js';
 import { IngestManager } from './pipeline/ingest.js';
@@ -22,31 +23,6 @@ import * as peekFrame from './tools/peek-frame.js';
 import * as searchVideos from './tools/search-videos.js';
 import type { Deps } from './tools/shared.js';
 import { SERVER_NAME, VERSION } from './version.js';
-
-const argv = process.argv.slice(2);
-if (argv.includes('--version') || argv.includes('-v')) {
-  console.log(`${SERVER_NAME} ${VERSION}`);
-  process.exit(0);
-}
-if (argv.includes('--help') || argv.includes('-h')) {
-  console.log(
-    `${SERVER_NAME} ${VERSION} — MCP server (stdio) for lazy, model-agnostic video understanding.
-
-Usage: video-context-mcp            start the MCP server on stdio
-       video-context-mcp --version  print version
-
-Environment: VCM_CACHE_DIR, YTDLP_COOKIES_FILE, VCM_MAX_CACHE_GB,
-             VCM_YTDLP_BIN, VCM_FFMPEG_BIN, VCM_FFPROBE_BIN, VCM_TESSERACT_BIN,
-             VCM_WHISPER_BIN, VCM_WHISPER_MODEL, VCM_EMBED_MODEL,
-             VCM_MAX_VIDEO_HEIGHT, VCM_SCENE_THRESHOLD, VCM_MIN_FRAME_GAP_S, VCM_MAX_FRAMES
-Requires yt-dlp on PATH; ffmpeg + tesseract for visual indexing;
-whisper-cli (whisper.cpp) for whisper_fallback ASR.
-
-Register in an MCP client config, e.g.:
-  { "mcpServers": { "video-context": { "command": "video-context-mcp" } } }`,
-  );
-  process.exit(0);
-}
 
 export function buildServer(deps: Deps): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: VERSION });
@@ -72,6 +48,11 @@ export function buildServer(deps: Deps): McpServer {
 }
 
 async function main(): Promise<void> {
+  const cliExit = await runCli(process.argv.slice(2));
+  if (cliExit !== null) {
+    process.exitCode = cliExit;
+    return;
+  }
   const config = loadConfig();
   const db = openDb(config.cacheDir);
   const interrupted = markInterruptedJobs(db);

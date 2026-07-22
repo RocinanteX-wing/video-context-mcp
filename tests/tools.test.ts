@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import { IngestManager } from '../src/pipeline/ingest.js';
+import * as getIngestStatus from '../src/tools/get-ingest-status.js';
 import * as getTranscript from '../src/tools/get-transcript.js';
 import * as getVideoTimeline from '../src/tools/get-video-timeline.js';
+import * as listVideos from '../src/tools/list-videos.js';
 import * as peekFrame from '../src/tools/peek-frame.js';
 import type { Deps } from '../src/tools/shared.js';
 
@@ -84,5 +86,22 @@ describe('tool handlers on partial/seeded state', () => {
     const out = text(res as never);
     expect(out).toContain('early words available now');
     expect(out).toContain('last ingest FAILED [NETWORK]');
+  });
+
+  it('reports setup progress detail and split cache accounting', async () => {
+    db.prepare(
+      "INSERT INTO jobs (video_id, stage, progress_pct, progress_detail, updated_at) VALUES (?, 'setup', 3, 'Downloading FFmpeg', ?)",
+    ).run(VID, new Date().toISOString());
+    const status = await getIngestStatus.handler(deps)({ video_id: VID });
+    const statusJson = JSON.parse(text(status as never)) as {
+      progress_pct: number;
+      progress_detail: string;
+    };
+    expect(statusJson).toMatchObject({ progress_pct: 3, progress_detail: 'Downloading FFmpeg' });
+
+    const listed = await listVideos.handler(deps)();
+    const listJson = JSON.parse(text(listed as never)) as Record<string, unknown>;
+    expect(listJson).toHaveProperty('video_cache_gb');
+    expect(listJson).toHaveProperty('runtime_cache_gb');
   });
 });

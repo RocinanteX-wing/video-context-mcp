@@ -59,13 +59,23 @@ export function handler(deps: Deps) {
       // Whole-cache size: includes video dirs, whisper models, the SQLite
       // index, and any orphans — not just directories with live rows.
       const totalGb = dirSizeBytes(deps.config.cacheDir) / 1024 ** 3;
+      const videoBytes = videos.reduce(
+        (sum, video) => sum + dirSizeBytes(join(deps.config.cacheDir, video.video_id)),
+        0,
+      );
+      const runtimeBytes = ['runtime', 'models', 'transformers', 'tesseract'].reduce(
+        (sum, name) => sum + dirSizeBytes(join(deps.config.cacheDir, name)),
+        0,
+      );
       return jsonResult({
         count: videos.length,
         cache_dir: deps.config.cacheDir,
         cache_gb: Math.round(totalGb * 100) / 100,
+        video_cache_gb: Math.round((videoBytes / 1024 ** 3) * 100) / 100,
+        runtime_cache_gb: Math.round((runtimeBytes / 1024 ** 3) * 100) / 100,
         cache_warning:
           totalGb > deps.config.maxCacheGb
-            ? `Cache exceeds VCM_MAX_CACHE_GB=${deps.config.maxCacheGb}. Consider delete_video on old entries.`
+            ? `Cache exceeds VCM_MAX_CACHE_GB=${deps.config.maxCacheGb}. Consider delete_video on old entries; runtime/model data is reusable and shown separately.`
             : null,
         videos,
       });

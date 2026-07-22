@@ -54,16 +54,25 @@ export function buildEmbedDocs(
 
 let extractor: FeatureExtractionPipeline | null = null;
 let extractorModel = '';
+let extractorRevision = '';
 
 async function loadExtractor(config: Config): Promise<FeatureExtractionPipeline> {
-  if (extractor && extractorModel === config.embedModel) return extractor;
+  if (
+    extractor &&
+    extractorModel === config.embedModel &&
+    extractorRevision === config.embedRevision
+  ) {
+    return extractor;
+  }
   const { pipeline, env } = await import('@huggingface/transformers');
   env.cacheDir = join(config.cacheDir, 'transformers');
   try {
     extractor = (await pipeline('feature-extraction', config.embedModel, {
       dtype: 'q8',
+      revision: config.embedRevision,
     })) as FeatureExtractionPipeline;
     extractorModel = config.embedModel;
+    extractorRevision = config.embedRevision;
     return extractor;
   } catch (err) {
     throw new VcmError(
@@ -71,6 +80,10 @@ async function loadExtractor(config: Config): Promise<FeatureExtractionPipeline>
       `Could not load embedding model ${config.embedModel} (${err instanceof Error ? err.message.slice(0, 200) : err}). Semantic search is unavailable; FTS still works.`,
     );
   }
+}
+
+export async function warmEmbeddings(config: Config): Promise<void> {
+  await loadExtractor(config);
 }
 
 export async function embedTexts(texts: string[], config: Config): Promise<number[][]> {

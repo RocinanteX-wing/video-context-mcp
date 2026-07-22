@@ -32,9 +32,18 @@ export interface VideoMetadata {
   autoCaptionLangs: string[];
 }
 
+export function buildYtdlpArgs(args: string[], config: Config): string[] {
+  return [
+    '--ignore-config',
+    '--js-runtimes',
+    `node:${process.execPath}`,
+    ...(config.cookiesFile ? ['--cookies', config.cookiesFile] : []),
+    ...args,
+  ];
+}
+
 async function runYtdlp(args: string[], config: Config, timeoutMs: number): Promise<string> {
-  const fullArgs = [...args];
-  if (config.cookiesFile) fullArgs.unshift('--cookies', config.cookiesFile);
+  const fullArgs = buildYtdlpArgs(args, config);
   try {
     const { stdout } = await execFileAsync(config.ytdlpBin, fullArgs, {
       maxBuffer: MAX_BUFFER,
@@ -222,11 +231,9 @@ export async function probeLocalFile(
         'ffprobe was not found on PATH. Install ffmpeg or set VCM_FFPROBE_BIN.',
       );
     }
-    // Bounded, not the raw Node error (which embeds the full command line).
-    const tail = (e.stderr ?? '').trim().split('\n').slice(-2).join(' | ').slice(0, 200);
     throw new VcmError(
       'YTDLP_FAILED',
-      `ffprobe could not read this file (unsupported or corrupt media?)${tail ? `: ${tail}` : '.'}`,
+      'ffprobe could not read this file. The media may be corrupt or use an unsupported container; run video-context-mcp doctor and verify the file plays locally.',
     );
   }
 }

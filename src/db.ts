@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 
 export type Stage =
   | 'pending'
+  | 'setup'
   | 'metadata'
   | 'transcript'
   | 'whisper'
@@ -161,6 +162,12 @@ function migrate(db: Database.Database): void {
     db.transaction(() => {
       db.exec('ALTER TABLE videos ADD COLUMN embedded_count INTEGER');
       db.pragma('user_version = 4');
+    })();
+  }
+  if (version < 5) {
+    db.transaction(() => {
+      db.exec('ALTER TABLE jobs ADD COLUMN progress_detail TEXT');
+      db.pragma('user_version = 5');
     })();
   }
 }

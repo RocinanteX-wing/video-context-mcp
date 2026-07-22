@@ -5,6 +5,7 @@ import type { Config } from '../config.js';
 import { VcmError } from '../errors.js';
 import type { VideoRef } from '../ids.js';
 import { resolveRef } from '../ids.js';
+import { RuntimeManager } from '../runtime/manager.js';
 import { extractFrames } from './frames.js';
 import { classifyFrame, ocrFrame } from './ocr.js';
 import { mergeCues, parseVtt } from './vtt.js';
@@ -49,11 +50,14 @@ export class IngestManager {
   private running = new Map<string, Promise<void>>();
   private active = 0;
   private waiters: (() => void)[] = [];
+  private runtime: RuntimeManager;
 
   constructor(
     private db: Database.Database,
     private config: Config,
-  ) {}
+  ) {
+    this.runtime = new RuntimeManager(config);
+  }
 
   /**
    * Resolve the ref, register the job, and kick the pipeline (not awaited).
@@ -93,8 +97,11 @@ export class IngestManager {
       .run(ref.id, ref.kind, ref.source, JSON.stringify(opts));
     this.db
       .prepare(
-        `INSERT INTO jobs (video_id, stage, progress_pct, updated_at) VALUES (?, 'pending', 0, ?)
-         ON CONFLICT(video_id) DO UPDATE SET stage = 'pending', progress_pct = 0, updated_at = excluded.updated_at`,
+        `INSERT INTO jobs (video_id, stage, progress_pct, progress_detail, updated_at)
+         VALUES (?, 'pending', 0, NULL, ?)
+         ON CONFLICT(video_id) DO UPDATE SET
+           stage = 'pending', progress_pct = 0, progress_detail = NULL,
+           updated_at = excluded.updated_at`,
       )
       .run(ref.id, now);
 
@@ -172,21 +179,43 @@ export class IngestManager {
     }
   }
 
-  private setStage(videoId: string, stage: string, pct: number): void {
+  private setStage(
+    videoId: string,
+    stage: string,
+    pct: number,
+    detail: string | null = null,
+  ): void {
     this.db.prepare('UPDATE videos SET stage = ? WHERE id = ?').run(stage, videoId);
-    this.setProgress(videoId, stage, pct);
+    this.setProgress(videoId, stage, pct, detail);
   }
 
-  private setProgress(videoId: string, stage: string, pct: number): void {
+  private setProgress(
+    videoId: string,
+    stage: string,
+    pct: number,
+    detail: string | null = null,
+  ): void {
     this.db
-      .prepare('UPDATE jobs SET stage = ?, progress_pct = ?, updated_at = ? WHERE video_id = ?')
-      .run(stage, pct, new Date().toISOString(), videoId);
+      .prepare(
+        'UPDATE jobs SET stage = ?, progress_pct = ?, progress_detail = ?, updated_at = ? WHERE video_id = ?',
+      )
+      .run(stage, pct, detail, new Date().toISOString(), videoId);
   }
 
   private async run(ref: VideoRef, opts: IngestOptions): Promise<void> {
     const videoDir = join(this.config.cacheDir, ref.id);
     const workDir = join(videoDir, 'tmp');
     try {
+      this.setStage(ref.id, 'setup', 1, 'Resolving the managed runtime');
+      const needed = new Set<'ytdlp' | 'ffmpeg' | 'ffprobe'>();
+      if (ref.kind === 'youtube') needed.add('ytdlp');
+      else needed.add('ffprobe');
+      if (opts.visual !== false || opts.whisperFallback) needed.add('ffmpeg');
+      const paths = await this.runtime.ensureTools([...needed], (pct, detail) =>
+        this.setProgress(ref.id, 'setup', 1 + Math.round(pct * 0.04), detail),
+      );
+      this.runtime.applyResolved(paths);
+
       this.setStage(ref.id, 'metadata', 5);
       let captionsVtt: string | null = null;
       let captionTrack: { lang: string; auto: boolean } | null = null;
@@ -236,8 +265,18 @@ export class IngestManager {
           } else {
             mediaPath = ref.source; // never deleted — the user's own file
           }
-          const vtt = await transcribeToVtt(mediaPath, workDir, this.config, (pct) =>
-            this.setProgress(ref.id, 'whisper', 30 + Math.round(pct * 0.15)),
+          const durationS = (
+            this.db.prepare('SELECT duration_s AS d FROM videos WHERE id = ?').get(ref.id) as {
+              d: number | null;
+            }
+          ).d;
+          const vtt = await transcribeToVtt(
+            mediaPath,
+            workDir,
+            this.config,
+            (pct, note) =>
+              this.setProgress(ref.id, 'whisper', 30 + Math.round(pct * 0.15), note ?? null),
+            durationS,
           );
           this.applyTranscript(ref.id, vtt, 'whisper', null);
         } catch (err) {

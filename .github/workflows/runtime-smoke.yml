@@ -1,0 +1,37 @@
+name: Managed runtime smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * 1'
+  push:
+    tags: ['v*']
+
+jobs:
+  provision:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-latest
+          - target: windows-x64
+            os: windows-latest
+          - target: macos-arm64
+            os: macos-14
+          - target: macos-x64
+            os: macos-15-intel
+    env:
+      VCM_CACHE_DIR: ${{ runner.temp }}/video-context-mcp-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node dist/index.js setup --json
+      - run: node dist/index.js doctor --json

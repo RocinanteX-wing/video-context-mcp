@@ -1,7 +1,7 @@
 /**
  * Network-gated end-to-end test: ingest a real, captioned YouTube video and
  * exercise timeline → transcript → search. Run with `just e2e` (sets VCM_E2E=1).
- * Requires yt-dlp on PATH and network access; skipped otherwise.
+ * Uses the managed yt-dlp bootstrap and network access; skipped otherwise.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,7 +32,7 @@ describe.skipIf(!process.env.VCM_E2E)('e2e: real YouTube ingest', () => {
   });
 
   it('ingests metadata and transcript end-to-end', { timeout: 120_000 }, async () => {
-    const start = ingest.start(VIDEO);
+    const start = ingest.start(VIDEO, { visual: false, embed: false });
     expect(start.videoId).toBe(VIDEO);
     await ingest.drain();
 

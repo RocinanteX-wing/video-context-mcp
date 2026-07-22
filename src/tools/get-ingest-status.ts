@@ -5,9 +5,9 @@ import { type Deps, getVideoRow, jsonResult, segmentCount } from './shared.js';
 export const name = 'get_ingest_status';
 
 export const description =
-  'Check ingestion progress for a video. Returns the current pipeline stage (metadata → ' +
-  'transcript → done), progress percent, what is already queryable, and an actionable error ' +
-  'message if ingestion failed.';
+  'Check ingestion progress for a video. Returns the current pipeline stage (setup → metadata → ' +
+  'transcript → done), progress percent/detail, what is already queryable, and an actionable ' +
+  'error message if ingestion failed.';
 
 export const inputSchema = {
   video_id: z.string().describe('The video_id returned by ingest_video'),
@@ -18,9 +18,16 @@ export function handler(deps: Deps) {
     try {
       const row = getVideoRow(deps.db, args.video_id);
       const job = deps.db
-        .prepare('SELECT stage, progress_pct, updated_at FROM jobs WHERE video_id = ?')
+        .prepare(
+          'SELECT stage, progress_pct, progress_detail, updated_at FROM jobs WHERE video_id = ?',
+        )
         .get(args.video_id) as
-        | { stage: string; progress_pct: number; updated_at: string }
+        | {
+            stage: string;
+            progress_pct: number;
+            progress_detail: string | null;
+            updated_at: string;
+          }
         | undefined;
       const segments = segmentCount(deps.db, args.video_id);
       const frames = (
@@ -85,6 +92,7 @@ export function handler(deps: Deps) {
         title: row.title,
         stage: row.stage,
         progress_pct: job?.progress_pct ?? 0,
+        progress_detail: job?.progress_detail ?? null,
         running: deps.ingest.isRunning(row.id),
         available: {
           metadata: row.title !== null,

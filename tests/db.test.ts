@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { markInterruptedJobs, openDb } from '../src/db.js';
 
@@ -28,10 +28,27 @@ describe('db', () => {
   }
 
   it('migrates a fresh database and is idempotent on reopen', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
-    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    const columns = db.pragma('table_info(jobs)') as { name: string }[];
+    expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
+  });
+
+  it('upgrades an existing v4 jobs table in place', () => {
+    db.close();
+    const legacy = new Database(join(dir, 'index.sqlite'));
+    legacy.exec(
+      'DROP TABLE IF EXISTS jobs; CREATE TABLE jobs (video_id TEXT PRIMARY KEY, stage TEXT NOT NULL, progress_pct REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);',
+    );
+    legacy.pragma('user_version = 4');
+    legacy.close();
+
+    db = openDb(dir);
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    const columns = db.pragma('table_info(jobs)') as { name: string }[];
+    expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
   });
 
   it('FTS rebuild makes pre-trigger rows searchable (migration v3 mechanism)', () => {
