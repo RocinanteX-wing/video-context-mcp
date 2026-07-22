@@ -195,21 +195,45 @@ function migrate(db: Database.Database): void {
       db.pragma('user_version = 6');
     })();
   }
+  if (version < 7) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE jobs ADD COLUMN owner_id TEXT;
+        ALTER TABLE jobs ADD COLUMN lease_until_ms INTEGER;
+      `);
+      db.pragma('user_version = 7');
+    })();
+  }
 }
 
 /**
  * Mark videos that were mid-ingest when a previous server process died.
  * Called once at startup, before any new jobs begin.
  */
-export function markInterruptedJobs(db: Database.Database): number {
-  const res = db
-    .prepare(
-      `UPDATE videos
-       SET stage = 'error',
-           error_code = 'INGEST_INTERRUPTED',
-           error_detail = 'Server exited mid-ingest. Re-run ingest_video with force=true.'
-       WHERE stage NOT IN ('done', 'error')`,
-    )
-    .run();
-  return res.changes;
+export function markInterruptedJobs(db: Database.Database, nowMs = Date.now()): number {
+  return db.transaction(() => {
+    const res = db
+      .prepare(
+        `UPDATE videos AS v
+         SET stage = 'error',
+             error_code = 'INGEST_INTERRUPTED',
+             error_detail = 'The ingest owner exited or its lease expired. Re-run ingest_video with force=true.'
+         WHERE v.stage NOT IN ('done', 'error')
+           AND NOT EXISTS (
+             SELECT 1 FROM jobs j
+             WHERE j.video_id = v.id AND j.lease_until_ms > ?
+           )`,
+      )
+      .run(nowMs);
+    db.prepare(
+      `UPDATE jobs
+       SET stage = 'error', progress_pct = 0, progress_detail = NULL,
+           owner_id = NULL, lease_until_ms = NULL, updated_at = ?
+       WHERE video_id IN (
+         SELECT id FROM videos
+         WHERE stage = 'error' AND error_code = 'INGEST_INTERRUPTED'
+       )`,
+    ).run(new Date(nowMs).toISOString());
+    return res.changes;
+  })();
 }

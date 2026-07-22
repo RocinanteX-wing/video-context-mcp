@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -37,6 +38,8 @@ export interface StartResult {
 }
 
 const MAX_CONCURRENT = 2;
+const INGEST_LEASE_MS = 2 * 60_000;
+const HEARTBEAT_MS = 30_000;
 
 /** Best-effort removal that never throws (cache cleanup must not crash jobs). */
 function safeRm(path: string): void {
@@ -52,6 +55,7 @@ export class IngestManager {
   private active = 0;
   private waiters: (() => void)[] = [];
   private runtime: RuntimeManager;
+  private readonly ownerId = `${process.pid}-${randomUUID()}`;
 
   constructor(
     private db: Database.Database,
@@ -91,13 +95,21 @@ export class IngestManager {
             `Cleanup is still finishing for ${ref.id}. Retry ingest_video after prune_cache reports cleanup_pending=0.`,
           );
         }
-        const row = this.db.prepare('SELECT stage FROM videos WHERE id = ?').get(ref.id) as
-          | { stage: string }
-          | undefined;
+        const row = this.db
+          .prepare(
+            `SELECT v.stage, j.lease_until_ms
+             FROM videos v LEFT JOIN jobs j ON j.video_id = v.id
+             WHERE v.id = ?`,
+          )
+          .get(ref.id) as { stage: string; lease_until_ms: number | null } | undefined;
         if (row?.stage === 'done' && !opts.force) {
           return { videoId: ref.id, stage: 'done', cached: true, alreadyRunning: false };
         }
-        if (row && !['done', 'error'].includes(row.stage)) {
+        if (
+          row &&
+          !['done', 'error'].includes(row.stage) &&
+          (row.lease_until_ms ?? 0) > Date.now()
+        ) {
           return {
             videoId: ref.id,
             stage: row.stage,
@@ -117,13 +129,15 @@ export class IngestManager {
           .run(ref.id, ref.kind, ref.source, JSON.stringify(opts));
         this.db
           .prepare(
-            `INSERT INTO jobs (video_id, stage, progress_pct, progress_detail, updated_at)
-             VALUES (?, 'pending', 0, NULL, ?)
+            `INSERT INTO jobs
+               (video_id, stage, progress_pct, progress_detail, updated_at, owner_id, lease_until_ms)
+             VALUES (?, 'pending', 0, NULL, ?, ?, ?)
              ON CONFLICT(video_id) DO UPDATE SET
                stage = 'pending', progress_pct = 0, progress_detail = NULL,
-               updated_at = excluded.updated_at`,
+               updated_at = excluded.updated_at, owner_id = excluded.owner_id,
+               lease_until_ms = excluded.lease_until_ms`,
           )
-          .run(ref.id, now);
+          .run(ref.id, now, this.ownerId, Date.now() + INGEST_LEASE_MS);
         return null;
       })
       .immediate();
@@ -132,13 +146,18 @@ export class IngestManager {
       return existing;
     }
 
+    const heartbeat = setInterval(() => this.heartbeat(ref.id), HEARTBEAT_MS);
+    heartbeat.unref();
     const job = this.withSlot(() => this.run(ref, opts))
       .catch((err) => {
         // run() handles its own errors; this guards cleanup/reporting crashes
         // so a long-lived MCP process never sees an unhandled rejection.
         console.error(`[video-context-mcp] ingest job ${ref.id} crashed:`, err);
       })
-      .finally(() => this.running.delete(ref.id));
+      .finally(() => {
+        clearInterval(heartbeat);
+        this.running.delete(ref.id);
+      });
     this.running.set(ref.id, job);
     return { videoId: ref.id, stage: 'pending', cached: false, alreadyRunning: false };
   }
@@ -216,8 +235,12 @@ export class IngestManager {
     pct: number,
     detail: string | null = null,
   ): void {
-    this.db.prepare('UPDATE videos SET stage = ? WHERE id = ?').run(stage, videoId);
-    this.setProgress(videoId, stage, pct, detail);
+    this.db
+      .transaction(() => {
+        this.setProgress(videoId, stage, pct, detail);
+        this.db.prepare('UPDATE videos SET stage = ? WHERE id = ?').run(stage, videoId);
+      })
+      .immediate();
   }
 
   private setProgress(
@@ -226,18 +249,81 @@ export class IngestManager {
     pct: number,
     detail: string | null = null,
   ): void {
-    this.db
+    const terminal = stage === 'done' || stage === 'error';
+    const updated = this.db
       .prepare(
-        'UPDATE jobs SET stage = ?, progress_pct = ?, progress_detail = ?, updated_at = ? WHERE video_id = ?',
+        `UPDATE jobs
+         SET stage = ?, progress_pct = ?, progress_detail = ?, updated_at = ?,
+             owner_id = ?, lease_until_ms = ?
+         WHERE video_id = ? AND owner_id = ?`,
       )
-      .run(stage, pct, detail, new Date().toISOString(), videoId);
+      .run(
+        stage,
+        pct,
+        detail,
+        new Date().toISOString(),
+        terminal ? null : this.ownerId,
+        terminal ? null : Date.now() + INGEST_LEASE_MS,
+        videoId,
+        this.ownerId,
+      );
+    if (updated.changes !== 1) {
+      throw new VcmError(
+        'INGEST_INTERRUPTED',
+        `Ingest lease for ${videoId} was lost to another process; this worker stopped without changing the new owner's state.`,
+      );
+    }
+  }
+
+  private ownsJob(videoId: string): boolean {
+    const row = this.db.prepare('SELECT owner_id FROM jobs WHERE video_id = ?').get(videoId) as
+      | { owner_id: string | null }
+      | undefined;
+    return row?.owner_id === this.ownerId;
+  }
+
+  private assertOwnsJob(videoId: string): void {
+    if (!this.ownsJob(videoId)) {
+      throw new VcmError(
+        'INGEST_INTERRUPTED',
+        `Ingest lease for ${videoId} was lost to another process; this worker stopped without changing the new owner's state.`,
+      );
+    }
+  }
+
+  private heartbeat(videoId: string): void {
+    try {
+      this.db
+        .prepare(
+          `UPDATE jobs SET updated_at = ?, lease_until_ms = ?
+           WHERE video_id = ? AND owner_id = ? AND stage NOT IN ('done', 'error')`,
+        )
+        .run(new Date().toISOString(), Date.now() + INGEST_LEASE_MS, videoId, this.ownerId);
+    } catch (err) {
+      console.error(
+        `[video-context-mcp] ingest lease heartbeat failed for ${videoId}: ${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`,
+      );
+    }
+  }
+
+  private async maintainCache(
+    reason: 'pre_ingest' | 'post_ingest',
+    protectIds: Iterable<string>,
+  ): Promise<void> {
+    try {
+      await this.cache.maintain({ reason, protectIds });
+    } catch (err) {
+      console.error(
+        `[video-context-mcp] ${reason} cache maintenance failed: ${err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)}`,
+      );
+    }
   }
 
   private async run(ref: VideoRef, opts: IngestOptions): Promise<void> {
     const videoDir = join(this.config.cacheDir, ref.id);
     const workDir = join(videoDir, 'tmp');
     try {
-      await this.cache.maintain({ reason: 'pre_ingest', protectIds: this.runningIds() });
+      await this.maintainCache('pre_ingest', this.runningIds());
       this.setStage(ref.id, 'setup', 1, 'Resolving the managed runtime');
       const needed = new Set<'ytdlp' | 'ffmpeg' | 'ffprobe'>();
       if (ref.kind === 'youtube') needed.add('ytdlp');
@@ -254,6 +340,7 @@ export class IngestManager {
 
       if (ref.kind === 'youtube') {
         const meta = await fetchYoutubeMetadata(ref, this.config);
+        this.assertOwnsJob(ref.id);
         this.db
           .prepare('UPDATE videos SET title = ?, channel = ?, duration_s = ? WHERE id = ?')
           .run(meta.title, meta.channel, meta.durationS, ref.id);
@@ -264,9 +351,11 @@ export class IngestManager {
         if (captionTrack) {
           mkdirSync(workDir, { recursive: true });
           captionsVtt = await downloadCaptions(ref, captionTrack, workDir, this.config);
+          this.assertOwnsJob(ref.id);
         }
       } else {
         const probe = await probeLocalFile(ref.source, this.config);
+        this.assertOwnsJob(ref.id);
         this.db
           .prepare('UPDATE videos SET title = ?, duration_s = ? WHERE id = ?')
           .run(basename(ref.source), probe.durationS, ref.id);
@@ -310,6 +399,7 @@ export class IngestManager {
               this.setProgress(ref.id, 'whisper', 30 + Math.round(pct * 0.15), note ?? null),
             durationS,
           );
+          this.assertOwnsJob(ref.id);
           this.applyTranscript(ref.id, vtt, 'whisper', null);
         } catch (err) {
           warn(err, 'ASR_FAILED');
@@ -332,6 +422,7 @@ export class IngestManager {
           // Dynamic import: the ONNX runtime stays unloaded unless needed.
           const { embedVideo } = await import('./embed.js');
           const stats = await embedVideo(this.db, ref.id, this.config);
+          this.assertOwnsJob(ref.id);
           this.db
             .prepare('UPDATE videos SET embedded_count = ?, vector_bytes = ? WHERE id = ?')
             .run(stats.count, stats.vectorBytes, ref.id);
@@ -347,39 +438,52 @@ export class IngestManager {
 
       const now = new Date().toISOString();
       this.db
-        .prepare(
-          "UPDATE videos SET stage = 'done', ingested_at = ?, last_accessed_at = ?, error_code = ?, error_detail = ? WHERE id = ?",
-        )
-        .run(
-          now,
-          now,
-          warnings[0]?.code ?? null,
-          warnings.length > 0 ? warnings.map((w) => `[${w.code}] ${w.message}`).join(' | ') : null,
-          ref.id,
-        );
-      this.setProgress(ref.id, 'done', 100);
+        .transaction(() => {
+          this.setProgress(ref.id, 'done', 100);
+          this.db
+            .prepare(
+              "UPDATE videos SET stage = 'done', ingested_at = ?, last_accessed_at = ?, error_code = ?, error_detail = ? WHERE id = ?",
+            )
+            .run(
+              now,
+              now,
+              warnings[0]?.code ?? null,
+              warnings.length > 0
+                ? warnings.map((w) => `[${w.code}] ${w.message}`).join(' | ')
+                : null,
+              ref.id,
+            );
+        })
+        .immediate();
     } catch (err) {
       // Hard failure: mark the error but leave all previously derived data
       // (from this run's completed swaps or an earlier ingest) untouched.
-      const code = err instanceof VcmError ? err.code : 'YTDLP_FAILED';
-      const detail = err instanceof Error ? err.message : String(err);
-      this.db
-        .prepare("UPDATE videos SET stage = 'error', error_code = ?, error_detail = ? WHERE id = ?")
-        .run(code, detail, ref.id);
-      this.setProgress(ref.id, 'error', 0);
+      if (this.ownsJob(ref.id)) {
+        const code = err instanceof VcmError ? err.code : 'YTDLP_FAILED';
+        const detail = err instanceof Error ? err.message : String(err);
+        this.db
+          .transaction(() => {
+            this.setProgress(ref.id, 'error', 0);
+            this.db
+              .prepare(
+                "UPDATE videos SET stage = 'error', error_code = ?, error_detail = ? WHERE id = ?",
+              )
+              .run(code, detail, ref.id);
+          })
+          .immediate();
+      } else {
+        console.error(`[video-context-mcp] stopped stale ingest worker for ${ref.id}`);
+      }
     } finally {
       safeRm(workDir);
       try {
         this.cache.refreshVideoUsage(ref.id);
-        await this.cache.maintain({
-          reason: 'post_ingest',
-          protectIds: new Set([...this.runningIds(), ref.id]),
-        });
       } catch (err) {
         console.error(
-          `[video-context-mcp] cache maintenance after ${ref.id} failed: ${err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)}`,
+          `[video-context-mcp] cache accounting for ${ref.id} failed: ${err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)}`,
         );
       }
+      await this.maintainCache('post_ingest', new Set([...this.runningIds(), ref.id]));
     }
   }
 
@@ -404,6 +508,7 @@ export class IngestManager {
       }
     ).d;
     const frames = await extractFrames(videoPath, videoDir, this.config, duration);
+    this.assertOwnsJob(ref.id);
     if (ref.kind === 'youtube') safeRm(videoPath); // source media gone ASAP
 
     // Swap in the new frame generation (files are already in place on disk).
@@ -427,6 +532,7 @@ export class IngestManager {
     for (let i = 0; i < frames.length; i++) {
       const frame = frames[i]!;
       const blocks = await ocrFrame(frame.path, this.config); // throws only on missing binary
+      this.assertOwnsJob(ref.id);
       const cls = classifyFrame(blocks);
       this.db.transaction(() => {
         updateClass.run(cls, frameIds[i]!);

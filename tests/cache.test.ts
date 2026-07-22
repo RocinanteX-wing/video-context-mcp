@@ -133,6 +133,43 @@ describe('cache lifecycle', () => {
     expect(db.prepare('SELECT id FROM videos WHERE id = ?').get('activeVid001')).toBeDefined();
   });
 
+  it('uses GC claims to serialize cleanup across cache-manager instances', async () => {
+    insertVideo('claimedVid01', 10, '2025-01-01T00:00:00.000Z');
+    let startCleanup: (() => void) | undefined;
+    let finishCleanup: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      startCleanup = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    const firstOps: CacheCleanupOps = {
+      removeVideoDir: vi.fn(async () => {
+        startCleanup?.();
+        await gate;
+      }),
+      deleteVectors: vi.fn(async () => undefined),
+      optimizeVectors: vi.fn(async () => undefined),
+    };
+    const secondOps: CacheCleanupOps = {
+      removeVideoDir: vi.fn(async () => undefined),
+      deleteVectors: vi.fn(async () => undefined),
+      optimizeVectors: vi.fn(async () => undefined),
+    };
+    const config = loadConfig({ VCM_CACHE_DIR: dir });
+    const firstManager = new CacheManager(db, config, firstOps);
+    const secondManager = new CacheManager(db, config, secondOps);
+
+    const firstRelease = firstManager.releaseVideo('claimedVid01');
+    await started;
+    const secondRelease = await secondManager.releaseVideo('claimedVid01');
+    expect(secondRelease).toMatchObject({ alreadyReleased: true, cleanupPending: true });
+    expect(secondOps.removeVideoDir).not.toHaveBeenCalled();
+
+    finishCleanup?.();
+    expect(await firstRelease).toMatchObject({ cleanupPending: false });
+  });
+
   it('excludes shared runtimes and models from the video quota', () => {
     const runtime = join(dir, 'runtime');
     const transformers = join(dir, 'transformers');

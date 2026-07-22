@@ -10,6 +10,7 @@ const LOW_WATER_RATIO = 0.9;
 const TOUCH_THROTTLE_MS = 60_000;
 const GC_LEASE_MS = 5 * 60_000;
 const GC_BATCH = 50;
+const EVICTION_GRACE_MS = 5 * 60_000;
 const TERMINAL_STAGES = new Set(['done', 'error']);
 
 export interface CacheVideoUsage {
@@ -180,7 +181,10 @@ export class CacheManager {
       stage: row.stage,
       lastAccessedAt: row.last_accessed_at ?? row.ingested_at,
       retainedBytes: Math.max(0, Number(row.retained_bytes)),
-      evictionEligible: TERMINAL_STAGES.has(row.stage),
+      evictionEligible:
+        TERMINAL_STAGES.has(row.stage) &&
+        Date.parse(row.last_accessed_at ?? row.ingested_at ?? '1970-01-01') <=
+          Date.now() - EVICTION_GRACE_MS,
     }));
   }
 

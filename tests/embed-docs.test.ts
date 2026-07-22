@@ -1,5 +1,15 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildEmbedDocs } from '../src/pipeline/embed.js';
+import { loadConfig } from '../src/config.js';
+import {
+  buildEmbedDocs,
+  deleteVideoVectors,
+  optimizeVectors,
+  replaceVideoVectors,
+  searchVectors,
+} from '../src/pipeline/embed.js';
 
 describe('buildEmbedDocs', () => {
   it('builds speech docs from segments and screen docs from OCR-rich frames', () => {
@@ -28,5 +38,32 @@ describe('buildEmbedDocs', () => {
   it('caps document length', () => {
     const docs = buildEmbedDocs([{ id: 1, start_ms: 0, text: 'x'.repeat(5000) }], []);
     expect(docs[0]!.text.length).toBe(1000);
+  });
+
+  it('deletes and compacts one video without affecting another', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vcm-lance-delete-'));
+    const config = loadConfig({ VCM_CACHE_DIR: dir });
+    try {
+      await replaceVideoVectors(
+        'vectorVid01',
+        [{ id: 'seg-1', kind: 'speech', ts_ms: 0, text: 'first video' }],
+        [[1, 0, 0]],
+        config,
+      );
+      await replaceVideoVectors(
+        'vectorVid02',
+        [{ id: 'seg-2', kind: 'speech', ts_ms: 0, text: 'second video' }],
+        [[0, 1, 0]],
+        config,
+      );
+
+      expect(await searchVectors([1, 0, 0], 5, config, 'vectorVid01')).toHaveLength(1);
+      await deleteVideoVectors('vectorVid01', config);
+      await optimizeVectors(config);
+      expect(await searchVectors([1, 0, 0], 5, config, 'vectorVid01')).toHaveLength(0);
+      expect(await searchVectors([0, 1, 0], 5, config, 'vectorVid02')).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -108,4 +108,35 @@ describe('IngestManager', () => {
       db.prepare('SELECT rowid FROM segments_fts WHERE segments_fts MATCH ?').all('whisper'),
     ).toHaveLength(1);
   });
+
+  it('does not race a pending release or another process lease', () => {
+    const file = join(dir, 'leased.mp4');
+    writeFileSync(file, 'leased video bytes');
+    const ref = resolveRef(file);
+    const config = loadConfig({ VCM_CACHE_DIR: dir });
+    const mgr = new IngestManager(db, config);
+
+    db.prepare(
+      `INSERT INTO cache_gc (video_id, reason, files_pending, vectors_pending, created_at)
+       VALUES (?, 'explicit', 1, 1, ?)`,
+    ).run(ref.id, new Date().toISOString());
+    expect(() => mgr.start(file)).toThrowError(/Cleanup is still finishing/);
+
+    db.prepare('DELETE FROM cache_gc WHERE video_id = ?').run(ref.id);
+    db.prepare(
+      `INSERT INTO videos (id, kind, source_url, stage)
+       VALUES (?, 'local', ?, 'frames')`,
+    ).run(ref.id, file);
+    db.prepare(
+      `INSERT INTO jobs
+         (video_id, stage, progress_pct, updated_at, owner_id, lease_until_ms)
+       VALUES (?, 'frames', 50, ?, 'another-process', ?)`,
+    ).run(ref.id, new Date().toISOString(), Date.now() + 60_000);
+
+    expect(mgr.start(file)).toMatchObject({
+      videoId: ref.id,
+      stage: 'frames',
+      alreadyRunning: true,
+    });
+  });
 });

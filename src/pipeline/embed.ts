@@ -60,6 +60,16 @@ export function buildEmbedDocs(
 let extractor: FeatureExtractionPipeline | null = null;
 let extractorModel = '';
 let extractorRevision = '';
+let vectorMutationTail: Promise<void> = Promise.resolve();
+
+function serializeVectorMutation<T>(fn: () => Promise<T>): Promise<T> {
+  const result = vectorMutationTail.then(fn, fn);
+  vectorMutationTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 async function loadExtractor(config: Config): Promise<FeatureExtractionPipeline> {
   if (
@@ -120,36 +130,42 @@ export async function replaceVideoVectors(
   vectors: number[][],
   config: Config,
 ): Promise<void> {
-  assertSafeId(videoId);
-  const db = await connect(config);
-  const rows = docs.map((d, i) => ({ ...d, video_id: videoId, vector: vectors[i]! }));
-  const names = await db.tableNames();
-  if (!names.includes(TABLE)) {
-    if (rows.length > 0) await db.createTable(TABLE, rows);
-    return;
-  }
-  const table = await db.openTable(TABLE);
-  await table.delete(`video_id = '${videoId}'`);
-  if (rows.length > 0) await table.add(rows);
+  return serializeVectorMutation(async () => {
+    assertSafeId(videoId);
+    const db = await connect(config);
+    const rows = docs.map((d, i) => ({ ...d, video_id: videoId, vector: vectors[i]! }));
+    const names = await db.tableNames();
+    if (!names.includes(TABLE)) {
+      if (rows.length > 0) await db.createTable(TABLE, rows);
+      return;
+    }
+    const table = await db.openTable(TABLE);
+    await table.delete(`video_id = '${videoId}'`);
+    if (rows.length > 0) await table.add(rows);
+  });
 }
 
 /** Remove a video's semantic rows. Safe to repeat and a no-op before first embed. */
 export async function deleteVideoVectors(videoId: string, config: Config): Promise<void> {
-  assertSafeId(videoId);
-  const db = await connect(config);
-  const names = await db.tableNames();
-  if (!names.includes(TABLE)) return;
-  const table = await db.openTable(TABLE);
-  await table.delete(`video_id = '${videoId}'`);
+  return serializeVectorMutation(async () => {
+    assertSafeId(videoId);
+    const db = await connect(config);
+    const names = await db.tableNames();
+    if (!names.includes(TABLE)) return;
+    const table = await db.openTable(TABLE);
+    await table.delete(`video_id = '${videoId}'`);
+  });
 }
 
 /** Compact deleted rows and prune old table versions so disk is actually reclaimed. */
 export async function optimizeVectors(config: Config): Promise<void> {
-  const db = await connect(config);
-  const names = await db.tableNames();
-  if (!names.includes(TABLE)) return;
-  const table = await db.openTable(TABLE);
-  await table.optimize({ cleanupOlderThan: new Date() });
+  return serializeVectorMutation(async () => {
+    const db = await connect(config);
+    const names = await db.tableNames();
+    if (!names.includes(TABLE)) return;
+    const table = await db.openTable(TABLE);
+    await table.optimize({ cleanupOlderThan: new Date() });
+  });
 }
 
 /** Cheap existence check so search never loads the model pointlessly. */

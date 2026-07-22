@@ -20,9 +20,12 @@ describe('MCP server over stdio', () => {
     client = new Client({ name: 'vcm-test-client', version: '0.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [join(REPO, 'node_modules', 'tsx', 'dist', 'cli.mjs'), join(REPO, 'src', 'index.ts')],
+      // The tsx CLI creates an IPC socket, which is unavailable in some
+      // sandboxed CI environments. Node's loader path runs the same source
+      // without the auxiliary socket.
+      args: ['--import', 'tsx', join(REPO, 'src', 'index.ts')],
       env: { ...process.env, VCM_CACHE_DIR: cacheDir },
-      stderr: 'ignore',
+      stderr: 'inherit',
     });
     await client.connect(transport);
   }, 30_000);

@@ -28,12 +28,15 @@ describe('db', () => {
   }
 
   it('migrates a fresh database and is idempotent on reopen', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(6);
+    expect(db.pragma('user_version', { simple: true })).toBe(7);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
-    expect(db.pragma('user_version', { simple: true })).toBe(6);
+    expect(db.pragma('user_version', { simple: true })).toBe(7);
     const columns = db.pragma('table_info(jobs)') as { name: string }[];
     expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['owner_id', 'lease_until_ms']),
+    );
     const videoColumns = db.pragma('table_info(videos)') as { name: string }[];
     expect(videoColumns.map((column) => column.name)).toEqual(
       expect.arrayContaining(['last_accessed_at', 'asset_bytes', 'vector_bytes']),
@@ -43,7 +46,7 @@ describe('db', () => {
     ).toBeDefined();
   });
 
-  it('upgrades an existing v4 database through cache lifecycle v6', () => {
+  it('upgrades an existing v4 database through cache lifecycle and ingest leases', () => {
     db.close();
     rmSync(join(dir, 'index.sqlite'), { force: true });
     const legacy = new Database(join(dir, 'index.sqlite'));
@@ -64,11 +67,33 @@ describe('db', () => {
     legacy.close();
 
     db = openDb(dir);
-    expect(db.pragma('user_version', { simple: true })).toBe(6);
+    expect(db.pragma('user_version', { simple: true })).toBe(7);
     const columns = db.pragma('table_info(jobs)') as { name: string }[];
     expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
     const videoColumns = db.pragma('table_info(videos)') as { name: string }[];
     expect(videoColumns.some((column) => column.name === 'last_accessed_at')).toBe(true);
+  });
+
+  it('upgrades an applied v6 database with ingest leases in v7', () => {
+    db.close();
+    rmSync(join(dir, 'index.sqlite'), { force: true });
+    const legacy = new Database(join(dir, 'index.sqlite'));
+    legacy.exec(`
+      CREATE TABLE jobs (
+        video_id TEXT PRIMARY KEY, stage TEXT NOT NULL,
+        progress_pct REAL NOT NULL DEFAULT 0, progress_detail TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    legacy.pragma('user_version = 6');
+    legacy.close();
+
+    db = openDb(dir);
+    expect(db.pragma('user_version', { simple: true })).toBe(7);
+    const columns = db.pragma('table_info(jobs)') as { name: string }[];
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['owner_id', 'lease_until_ms']),
+    );
   });
 
   it('FTS rebuild makes pre-trigger rows searchable (migration v3 mechanism)', () => {
@@ -167,5 +192,26 @@ describe('db', () => {
     };
     expect(row.stage).toBe('error');
     expect(row.error_code).toBe('INGEST_INTERRUPTED');
+  });
+
+  it('does not interrupt a job leased by another live MCP process', () => {
+    insertVideo('vidLeased01', 'frames');
+    db.prepare(
+      `INSERT INTO jobs
+         (video_id, stage, progress_pct, updated_at, owner_id, lease_until_ms)
+       VALUES (?, 'frames', 50, ?, 'other-process', ?)`,
+    ).run('vidLeased01', new Date(1_000).toISOString(), 20_000);
+
+    expect(markInterruptedJobs(db, 10_000)).toBe(0);
+    const live = db.prepare('SELECT stage FROM videos WHERE id = ?').get('vidLeased01') as {
+      stage: string;
+    };
+    expect(live.stage).toBe('frames');
+
+    expect(markInterruptedJobs(db, 30_000)).toBe(1);
+    const expired = db.prepare('SELECT stage FROM videos WHERE id = ?').get('vidLeased01') as {
+      stage: string;
+    };
+    expect(expired.stage).toBe('error');
   });
 });

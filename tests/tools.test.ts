@@ -38,7 +38,11 @@ describe('tool handlers on partial/seeded state', () => {
     dir = mkdtempSync(join(tmpdir(), 'vcm-tools-'));
     db = openDb(dir);
     const config = loadConfig({ VCM_CACHE_DIR: dir });
-    const cache = new CacheManager(db, config);
+    const cache = new CacheManager(db, config, {
+      removeVideoDir: async () => undefined,
+      deleteVectors: async () => undefined,
+      optimizeVectors: async () => undefined,
+    });
     deps = { db, config, ingest: new IngestManager(db, config, cache), cache };
     // Mid-ingest video: transcript landed, frames still processing.
     db.prepare(
@@ -127,6 +131,28 @@ describe('tool handlers on partial/seeded state', () => {
     const preview = await pruneCache.handler(deps)({});
     const previewJson = JSON.parse(text(preview as never)) as Record<string, unknown>;
     expect(previewJson).toMatchObject({ dry_run: true, candidate_count: 0 });
+  });
+
+  it('applies prune_cache only when dry_run=false', async () => {
+    deps.config.maxCacheGb = 1 / 1024;
+    db.prepare(
+      `INSERT INTO videos
+         (id, kind, source_url, title, stage, ingested_at, last_accessed_at, asset_bytes)
+       VALUES ('oldPrune001', 'youtube', 'https://example.test', 'Old', 'done', ?, ?, ?)`,
+    ).run('2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z', 2 * 1024 ** 2);
+
+    const preview = JSON.parse(text((await pruneCache.handler(deps)({})) as never)) as Record<
+      string,
+      unknown
+    >;
+    expect(preview).toMatchObject({ dry_run: true, candidate_count: 1, released_count: 0 });
+    expect(db.prepare('SELECT id FROM videos WHERE id = ?').get('oldPrune001')).toBeDefined();
+
+    const applied = JSON.parse(
+      text((await pruneCache.handler(deps)({ dry_run: false })) as never),
+    ) as Record<string, unknown>;
+    expect(applied).toMatchObject({ dry_run: false, released_count: 1 });
+    expect(db.prepare('SELECT id FROM videos WHERE id = ?').get('oldPrune001')).toBeUndefined();
   });
 });
 
