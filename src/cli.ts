@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { loadConfig } from './config.js';
 import { VcmError } from './errors.js';
 import { RuntimeManager } from './runtime/manager.js';
+import { cleanupStaleCacheTemps } from './temp-cleanup.js';
 import { SERVER_NAME, VERSION } from './version.js';
 
 function help(): string {
@@ -61,6 +62,19 @@ export async function runCli(argv: string[]): Promise<number | null> {
     const config = loadConfig();
     const runtime = new RuntimeManager(config);
     if (command === 'setup') {
+      const tempCleanup = cleanupStaleCacheTemps(config.cacheDir);
+      const tempRemoved =
+        tempCleanup.runtimeStagingRemoved +
+        tempCleanup.modelDownloadsRemoved +
+        tempCleanup.activePointersRemoved;
+      if (!json && tempRemoved > 0) {
+        console.error(`[${SERVER_NAME}] removed ${tempRemoved} stale temporary cache item(s)`);
+      }
+      if (tempCleanup.failures > 0) {
+        console.error(
+          `[${SERVER_NAME}] could not remove ${tempCleanup.failures} stale temporary cache item(s); check cache permissions`,
+        );
+      }
       let lastBucket = -1;
       const paths = await runtime.ensureTools(
         ['ytdlp', 'ffmpeg', 'ffprobe'],

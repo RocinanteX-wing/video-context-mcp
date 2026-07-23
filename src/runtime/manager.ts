@@ -13,7 +13,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  statSync,
   statfsSync,
   writeFileSync,
 } from 'node:fs';
@@ -24,6 +23,7 @@ import { promisify } from 'node:util';
 import { Open } from 'unzipper';
 import type { BinaryName, Config } from '../config.js';
 import { VcmError } from '../errors.js';
+import { acquireRuntimeLock } from './lock.js';
 import {
   type ArtifactExecutable,
   type ManagedTool,
@@ -34,8 +34,6 @@ import {
 const execFileAsync = promisify(execFile);
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const HEALTH_TIMEOUT_MS = 15_000;
-const LOCK_TIMEOUT_MS = 15 * 60_000;
-const STALE_LOCK_MS = 30 * 60_000;
 const MAX_REDIRECTS = 5;
 
 export type RuntimeProgress = (pct: number, detail: string) => void;
@@ -60,10 +58,6 @@ export interface DoctorComponent {
 }
 
 const installs = new Map<string, Promise<Map<ManagedTool, string>>>();
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function hashFile(path: string): string {
   const hash = createHash('sha256');
@@ -348,36 +342,6 @@ export class RuntimeManager {
     renameSync(temporary, path);
   }
 
-  private async acquireLock(id: string): Promise<() => void> {
-    const lock = join(this.runtimeDir, '.locks', `${id}.lock`);
-    mkdirSync(dirname(lock), { recursive: true });
-    const started = Date.now();
-    for (;;) {
-      try {
-        mkdirSync(lock);
-        return () => rmSync(lock, { recursive: true, force: true });
-      } catch (err) {
-        const e = err as NodeJS.ErrnoException;
-        if (e.code !== 'EEXIST') throw err;
-        try {
-          if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) {
-            rmSync(lock, { recursive: true, force: true });
-            continue;
-          }
-        } catch {
-          continue;
-        }
-        if (Date.now() - started > LOCK_TIMEOUT_MS) {
-          throw new VcmError(
-            'TOOLCHAIN_DOWNLOAD_FAILED',
-            `Timed out waiting for another process to install ${id}. Run video-context-mcp doctor and retry.`,
-          );
-        }
-        await delay(250);
-      }
-    }
-  }
-
   private async provision(
     artifact: RuntimeArtifact,
     onProgress?: RuntimeProgress,
@@ -394,7 +358,7 @@ export class RuntimeManager {
     artifact: RuntimeArtifact,
     onProgress?: RuntimeProgress,
   ): Promise<Map<ManagedTool, string>> {
-    const release = await this.acquireLock(artifact.id);
+    const lock = await acquireRuntimeLock(this.runtimeDir, artifact.id);
     const target = join(this.runtimeDir, 'artifacts', artifact.id);
     const resolved = new Map<ManagedTool, string>();
     try {
@@ -433,6 +397,7 @@ export class RuntimeManager {
           }
         }
         if (valid) {
+          lock.assertOwned();
           for (const executable of artifact.executables) {
             const path = resolved.get(executable.tool);
             if (!path) continue;
@@ -484,9 +449,11 @@ export class RuntimeManager {
           }
           await healthCheck(path, executable, true);
         }
+        lock.assertOwned();
         rmSync(target, { recursive: true, force: true });
         mkdirSync(dirname(target), { recursive: true });
         renameSync(unpacked, target);
+        lock.assertOwned();
         for (const executable of artifact.executables) {
           const path = join(target, executable.filename);
           resolved.set(executable.tool, path);
@@ -504,7 +471,7 @@ export class RuntimeManager {
         rmSync(staging, { recursive: true, force: true });
       }
     } finally {
-      release();
+      lock.release();
     }
   }
 

@@ -17,7 +17,7 @@ import * as getVideoTimeline from '../src/tools/get-video-timeline.js';
 import * as listVideos from '../src/tools/list-videos.js';
 import * as peekFrame from '../src/tools/peek-frame.js';
 import * as pruneCache from '../src/tools/prune-cache.js';
-import { filterLiveVectorHits } from '../src/tools/search-videos.js';
+import { filterLiveVectorHits, loadLiveVideoTitles } from '../src/tools/search-videos.js';
 import type { Deps } from '../src/tools/shared.js';
 
 const VID = 'vidPartial01';
@@ -131,6 +131,15 @@ describe('tool handlers on partial/seeded state', () => {
     const preview = await pruneCache.handler(deps)({});
     const previewJson = JSON.parse(text(preview as never)) as Record<string, unknown>;
     expect(previewJson).toMatchObject({ dry_run: true, candidate_count: 0 });
+  });
+
+  it('loads semantic-hit metadata only for live candidate videos', () => {
+    const live = loadLiveVideoTitles(db, [
+      { video_id: 'deleted0001' },
+      { video_id: VID },
+      { video_id: VID },
+    ]);
+    expect([...live]).toEqual([[VID, 'Partial Video']]);
   });
 
   it('applies prune_cache only when dry_run=false', async () => {

@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
+import { openDb } from '../src/db.js';
 import {
   buildEmbedDocs,
   deleteVideoVectors,
+  loadEmbedFrames,
   optimizeVectors,
   replaceVideoVectors,
   searchVectors,
@@ -38,6 +40,30 @@ describe('buildEmbedDocs', () => {
   it('caps document length', () => {
     const docs = buildEmbedDocs([{ id: 1, start_ms: 0, text: 'x'.repeat(5000) }], []);
     expect(docs[0]!.text.length).toBe(1000);
+  });
+
+  it('loads OCR blocks in deterministic insertion order', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vcm-embed-frames-'));
+    const db = openDb(dir);
+    try {
+      db.prepare(
+        "INSERT INTO videos (id, kind, source_url, stage) VALUES ('embedFrame01', 'youtube', 'https://example.test', 'done')",
+      ).run();
+      db.prepare(
+        "INSERT INTO frames (id, video_id, ts_ms, path) VALUES (20, 'embedFrame01', 2000, '/f2.jpg'), (10, 'embedFrame01', 1000, '/f1.jpg')",
+      ).run();
+      db.prepare(
+        "INSERT INTO ocr_blocks (id, frame_id, text) VALUES (30, 10, 'second line'), (15, 10, 'first line')",
+      ).run();
+
+      expect(loadEmbedFrames(db, 'embedFrame01')).toEqual([
+        { id: 10, ts_ms: 1000, ocrText: 'first line second line' },
+        { id: 20, ts_ms: 2000, ocrText: null },
+      ]);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('deletes and compacts one video without affecting another', async () => {

@@ -38,6 +38,12 @@ export interface EmbedStats {
   vectorBytes: number;
 }
 
+interface EmbedFrame {
+  id: number;
+  ts_ms: number;
+  ocrText: string | null;
+}
+
 /** Pure doc builder (unit-tested): what gets embedded for a video. */
 export function buildEmbedDocs(
   segments: { id: number; start_ms: number; text: string }[],
@@ -55,6 +61,33 @@ export function buildEmbedDocs(
     }
   }
   return docs;
+}
+
+/** Load OCR in stable provider/insertion order before constructing screen documents. */
+export function loadEmbedFrames(db: Database.Database, videoId: string): EmbedFrame[] {
+  const rows = db
+    .prepare(
+      `SELECT f.id, f.ts_ms, b.text AS ocr_text
+       FROM frames f
+       LEFT JOIN ocr_blocks b ON b.frame_id = f.id
+       WHERE f.video_id = ?
+       ORDER BY f.ts_ms, f.id, b.id`,
+    )
+    .all(videoId) as { id: number; ts_ms: number; ocr_text: string | null }[];
+  const frames = new Map<number, { id: number; ts_ms: number; texts: string[] }>();
+  for (const row of rows) {
+    let frame = frames.get(row.id);
+    if (!frame) {
+      frame = { id: row.id, ts_ms: row.ts_ms, texts: [] };
+      frames.set(row.id, frame);
+    }
+    if (row.ocr_text) frame.texts.push(row.ocr_text);
+  }
+  return [...frames.values()].map((frame) => ({
+    id: frame.id,
+    ts_ms: frame.ts_ms,
+    ocrText: frame.texts.length > 0 ? frame.texts.join(' ') : null,
+  }));
 }
 
 let extractor: FeatureExtractionPipeline | null = null;
@@ -213,12 +246,7 @@ export async function embedVideo(
   const segments = db
     .prepare('SELECT id, start_ms, text FROM segments WHERE video_id = ? ORDER BY start_ms')
     .all(videoId) as { id: number; start_ms: number; text: string }[];
-  const frames = db
-    .prepare(
-      `SELECT f.id, f.ts_ms, (SELECT GROUP_CONCAT(b.text, ' ') FROM ocr_blocks b WHERE b.frame_id = f.id) AS ocrText
-       FROM frames f WHERE f.video_id = ? ORDER BY f.ts_ms`,
-    )
-    .all(videoId) as { id: number; ts_ms: number; ocrText: string | null }[];
+  const frames = loadEmbedFrames(db, videoId);
 
   const docs = buildEmbedDocs(segments, frames);
   if (docs.length === 0) {

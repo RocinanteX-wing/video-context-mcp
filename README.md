@@ -96,6 +96,8 @@ of the budget. Running and just-completed ingests are protected; an oversized
 new result is retained with a warning. Shared managed binaries and OCR/ASR/
 embedding models are reusable and never automatically evicted. Use
 `list_videos` for accounting or `prune_cache` for a dry-run preview.
+Interrupted runtime and native ASR downloads are reclaimed on the next server
+startup or `setup` run after they have remained inactive for at least one hour.
 
 ## Roadmap
 

@@ -13,6 +13,7 @@ import { runCli } from './cli.js';
 import { loadConfig } from './config.js';
 import { markInterruptedJobs, openDb } from './db.js';
 import { IngestManager } from './pipeline/ingest.js';
+import { cleanupStaleCacheTemps } from './temp-cleanup.js';
 import * as cropRegion from './tools/crop-region.js';
 import * as deleteVideo from './tools/delete-video.js';
 import * as getIngestStatus from './tools/get-ingest-status.js';
@@ -57,6 +58,19 @@ async function main(): Promise<void> {
     return;
   }
   const config = loadConfig();
+  const tempCleanup = cleanupStaleCacheTemps(config.cacheDir);
+  const tempRemoved =
+    tempCleanup.runtimeStagingRemoved +
+    tempCleanup.modelDownloadsRemoved +
+    tempCleanup.activePointersRemoved;
+  if (tempRemoved > 0) {
+    console.error(`[${SERVER_NAME}] removed ${tempRemoved} stale temporary cache item(s)`);
+  }
+  if (tempCleanup.failures > 0) {
+    console.error(
+      `[${SERVER_NAME}] could not remove ${tempCleanup.failures} stale temporary cache item(s); check cache permissions`,
+    );
+  }
   const db = openDb(config.cacheDir);
   const interrupted = markInterruptedJobs(db);
   if (interrupted > 0) {

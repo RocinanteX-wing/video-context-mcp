@@ -2,6 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 
+const SQLITE_BUSY_TIMEOUT_MS = 5000;
+
 export type Stage =
   | 'pending'
   | 'setup'
@@ -106,7 +108,7 @@ END;
 
 export function openDb(cacheDir: string): Database.Database {
   mkdirSync(cacheDir, { recursive: true });
-  const db = new Database(join(cacheDir, 'index.sqlite'));
+  const db = new Database(join(cacheDir, 'index.sqlite'), { timeout: SQLITE_BUSY_TIMEOUT_MS });
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   migrate(db);

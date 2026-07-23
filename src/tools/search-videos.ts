@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { toToolError } from '../errors.js';
 import { type RankedItem, rrfFuse } from '../utils/rrf.js';
@@ -33,6 +34,19 @@ export function filterLiveVectorHits<T extends { video_id: string }>(
   limit: number,
 ): T[] {
   return hits.filter((hit) => liveVideoIds.has(hit.video_id)).slice(0, limit);
+}
+
+export function loadLiveVideoTitles(
+  db: Database.Database,
+  hits: { video_id: string }[],
+): Map<string, string | null> {
+  const candidateIds = [...new Set(hits.map((hit) => hit.video_id))];
+  if (candidateIds.length === 0) return new Map();
+  const placeholders = candidateIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(`SELECT id, title FROM videos WHERE id IN (${placeholders})`)
+    .all(...candidateIds) as { id: string; title: string | null }[];
+  return new Map(rows.map((row) => [row.id, row.title]));
 }
 
 export function handler(deps: Deps) {
@@ -112,22 +126,13 @@ export function handler(deps: Deps) {
             deps.config,
             args.video_id,
           );
-          const liveIds = new Set(
-            (
-              deps.db.prepare('SELECT id FROM videos').all() as {
-                id: string;
-              }[]
-            ).map((row) => row.id),
-          );
-          const titleStmt = deps.db.prepare('SELECT title FROM videos WHERE id = ?');
+          const liveVideos = loadLiveVideoTitles(deps.db, hits);
           lists.push(
-            filterLiveVectorHits(hits, liveIds, perList).map((h) => ({
+            filterLiveVectorHits(hits, new Set(liveVideos.keys()), perList).map((h) => ({
               key: h.id,
               item: {
                 video_id: h.video_id,
-                title:
-                  (titleStmt.get(h.video_id) as { title: string | null } | undefined)?.title ??
-                  null,
+                title: liveVideos.get(h.video_id) ?? null,
                 ts_ms: h.ts_ms,
                 kind: h.kind,
                 display: h.text.length > 120 ? `${h.text.slice(0, 120)}…` : h.text,

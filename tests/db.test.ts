@@ -28,6 +28,7 @@ describe('db', () => {
   }
 
   it('migrates a fresh database and is idempotent on reopen', () => {
+    expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
     expect(db.pragma('user_version', { simple: true })).toBe(7);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
