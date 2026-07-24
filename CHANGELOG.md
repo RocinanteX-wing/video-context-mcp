@@ -1,0 +1,23 @@
+# Changelog
+
+All notable changes to this project will be documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Unreleased
+
+### Added
+
+- Complete transcript-range export to a local UTF-8 file through
+  `get_transcript(delivery="file")`.
+- Structured transcript delivery metadata and resume handles.
+- Selective asynchronous `repair_embeddings` without media re-download.
+- Contributor, security, issue, pull-request, and release guidance.
+
+### Changed
+
+- Embedding failures now direct agents to selective repair instead of a full
+  forced re-ingest.
+- Documentation now describes supported platforms and common first-run
+  remediation.
+

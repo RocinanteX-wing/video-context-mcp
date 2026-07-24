@@ -20,7 +20,7 @@ Each stage commits rows as it finishes, so partial results are queryable mid-ing
 
 ## Storage
 
-`~/.cache/video-context-mcp/` holds a single `index.sqlite` (WAL, FK cascade) plus one directory per video (`<id>/frames/` in Phase 2; `tmp/` during ingest, deleted after). Source media is never retained — only derived artifacts.
+`~/.cache/video-context-mcp/` holds a single `index.sqlite` (WAL, FK cascade) plus one directory per video (`<id>/frames/` for keyframes, `<id>/exports/` for reproducible transcript files, and `tmp/` during ingest, deleted after). Source media is never retained — only derived artifacts. Transcript exports are disposable copies generated from canonical segment rows and follow the same whole-video cleanup lifecycle.
 
 Tables: `videos` (identity, title/channel/upload date, stage, and error), `jobs` (progress), `segments` (+ `segments_fts` FTS5 external-content, porter), `chapters`, and Phase-2-ready `frames` / `ocr_blocks`. Content addressing: YouTube ID as-is; local files → `local-<sha256(size+head8MB)[:12]>`.
 
@@ -31,16 +31,19 @@ by a cross-process lease. The pinned ONNX artifact is checksum-validated; only
 the exact invalid model file is removed and retried once. Semantic failures
 remain warnings, and search continues with SQLite FTS.
 
+`repair_embeddings` enters only the existing `embed` job stage and rebuilds
+vectors from committed segment/OCR rows. It shares ingestion concurrency and
+leases but never resolves yt-dlp/FFmpeg or touches source-derived rows.
+
 ## Error taxonomy
 
 `yt-dlp` failure modes (bot check, private/members-only/age-restricted, geo-block, removed video, network) are pattern-matched in `errors.ts` into typed codes with agent-actionable remediation (e.g. `NEEDS_COOKIES` → "set `YTDLP_COOKIES_FILE`"). Unknown failures surface a bounded stderr tail, never a dump.
 
-## Phase roadmap
+## Capability roadmap
 
-| Phase | Adds | Notes |
-|---|---|---|
-| 1 | metadata, captions transcript, timeline, FTS search, lifecycle | shipped |
-| 2 | ffmpeg scene-detect keyframes (≤1280px JPEG stored, ≤1024px served), tesseract OCR + text-density classifier, `peek_frame`/`crop_region`, OCR in search, visual-failure downgrade to warning | shipped — client-model vision |
-| 3 | `whisper-cli` fallback ASR (opt-in per ingest, auto-downloaded ggml model, VTT output through the shared parser, progress via `-pp`) | shipped — captions always preferred |
-| 4 | ONNX embeddings (Transformers.js, lazy-loaded) + LanceDB `chunks` table, generational per-video vector replacement, RRF fusion of FTS speech/screen + dense lists, `embed` pipeline stage (warning-degradable) | shipped — "RAG over your video library" |
-| 5 | code-diff reconstruction, diagram→Mermaid, deictic alignment | experimental; client-vision workflows first, optional `VISION_ENDPOINT` for ingest-time enrichment |
+The shipped foundation covers transcript and visual extraction, local ASR,
+hybrid search, selective semantic repair, managed runtimes, and bounded cache
+lifecycle. Near-term work focuses on caption-language selection, resilient
+visual extraction, and broader long-form evaluation. Code-diff reconstruction,
+diagram-to-Mermaid, and deictic alignment remain experimental client-vision
+workflows rather than server-side model dependencies.

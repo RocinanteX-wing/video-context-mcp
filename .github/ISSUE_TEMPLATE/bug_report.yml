@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem with ingestion, tools, or the managed runtime
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include cookies, credentials, private video URLs, or sensitive transcript content. Report security issues through a private Security Advisory.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the expected and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Provide the smallest sequence of MCP calls or commands that reproduces the problem.
+      placeholder: |
+        1. Call ingest_video with …
+        2. Poll get_ingest_status …
+        3. Observe …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 0.8.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: macOS 15 arm64, Windows 11 x64, Ubuntu 24.04 x64
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js and MCP client
+      placeholder: Node 22.15.0, Codex CLI
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Redacted doctor output
+      description: Paste `video-context-mcp doctor --json` output after removing private paths or identifiers.
+      render: json
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include bounded logs or screenshots if useful. Never attach a cookies file.
+

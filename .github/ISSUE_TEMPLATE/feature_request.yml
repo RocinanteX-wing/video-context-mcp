@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose an agent workflow or capability
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Agent workflow
+      description: What is the agent trying to accomplish, and where does the current workflow break down?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the MCP inputs, outputs, or lifecycle you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What can callers do today, and why is it insufficient?
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Design fit
+      options:
+        - label: The proposal can preserve compact, pull-based tool output.
+        - label: The proposal can work without binding the server to one model provider.
+
