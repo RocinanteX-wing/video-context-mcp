@@ -24,3 +24,5 @@ All notable changes to this project will be documented here. The format follows
   remediation.
 - Repository text files are checked out with LF line endings on every platform
   so formatting checks are deterministic on Windows.
+- GitHub workflows use the current Node 24-based checkout and setup-node action
+  majors instead of deprecated Node 20-based releases.
