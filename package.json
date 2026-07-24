@@ -15,7 +15,16 @@
   "bugs": {
     "url": "https://github.com/smallthinkingmachines/video-context-mcp/issues"
   },
-  "files": ["dist", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/assets/demo.gif"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
@@ -24,6 +33,7 @@
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "demo": "npm run build && node scripts/demo-client.mjs",
     "clean": "rm -rf dist coverage",
     "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build"
   },
