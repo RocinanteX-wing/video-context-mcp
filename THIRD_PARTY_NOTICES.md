@@ -21,10 +21,12 @@ LGPL-2.1-or-later, with GPL-2.0-or-later applying when GPL components are
 enabled. The selected standalone builds enable GPL components and do not
 enable `--enable-nonfree`.
 
-- FFmpeg source tag: https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
+- FFmpeg source baseline: https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 - FFmpeg license and compliance guidance: https://ffmpeg.org/legal.html
-- macOS/Linux builds, checksums, configuration, and build-script source:
+- macOS builds, checksums, configuration, and build-script source:
   https://ffmpeg.martin-riedl.de/
+- Linux GPL build, checksum, configuration, and build-script source:
+  https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-06-30-13-34
 - Windows build, checksum, configuration, and corresponding source link:
   https://www.gyan.dev/ffmpeg/builds/
 

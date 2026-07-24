@@ -30,3 +30,5 @@ All notable changes to this project will be documented here. The format follows
   upgrades remain explicit compatibility work.
 - Managed runtime smoke tests resolve their isolated cache path after a runner
   is assigned, allowing GitHub to validate and schedule the workflow.
+- Linux managed FFmpeg now uses one checksum-pinned GPL BtbN archive for both
+  `ffmpeg` and `ffprobe`; nonfree builds remain rejected at load time.

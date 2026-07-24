@@ -6,6 +6,7 @@ import {
   createReadStream,
   createWriteStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -34,6 +35,7 @@ import {
 const execFileAsync = promisify(execFile);
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const HEALTH_TIMEOUT_MS = 15_000;
+const ARCHIVE_TIMEOUT_MS = 2 * 60_000;
 const MAX_REDIRECTS = 5;
 
 export type RuntimeProgress = (pct: number, detail: string) => void;
@@ -239,6 +241,76 @@ async function extractArtifact(
     await pipeline(createReadStream(archivePath), createWriteStream(output, { flags: 'wx' }));
     if (process.platform !== 'win32') chmodSync(output, 0o755);
     result.set(executable.tool, output);
+    return result;
+  }
+
+  if (artifact.format === 'tar.xz') {
+    let members: string[];
+    try {
+      const { stdout } = await execFileAsync('tar', ['-tJf', archivePath], {
+        timeout: ARCHIVE_TIMEOUT_MS,
+        maxBuffer: 8 * 1024 * 1024,
+        windowsHide: true,
+      });
+      members = stdout.split(/\r?\n/).filter(Boolean);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      throw new VcmError(
+        code === 'ENOENT' ? 'TOOLCHAIN_UNUSABLE' : 'TOOLCHAIN_INTEGRITY_FAILED',
+        code === 'ENOENT'
+          ? 'The system tar executable with xz support is required to unpack the managed Linux FFmpeg build. Install tar/xz or use VCM_TOOLCHAIN_MODE=system.'
+          : `Could not inspect the pinned ${artifact.id} archive. Clear the disposable runtime cache and run video-context-mcp setup again.`,
+      );
+    }
+    for (const member of members) validateArchivePath(member);
+
+    for (const executable of artifact.executables) {
+      const matches = members.filter((member) =>
+        archivePathMatches(member, executable.archivePath),
+      );
+      const member = matches[0];
+      if (matches.length !== 1 || !member) {
+        throw new VcmError(
+          'TOOLCHAIN_INTEGRITY_FAILED',
+          `${artifact.id} did not contain exactly one ${executable.tool} executable.`,
+        );
+      }
+      const normalized = member.replaceAll('\\', '/');
+      const stripComponents = normalized.split('/').filter(Boolean).length - 1;
+      const output = join(destination, executable.filename);
+      try {
+        await execFileAsync(
+          'tar',
+          [
+            '-xJf',
+            archivePath,
+            '-C',
+            destination,
+            `--strip-components=${stripComponents}`,
+            '--no-same-owner',
+            '--',
+            member,
+          ],
+          {
+            timeout: ARCHIVE_TIMEOUT_MS,
+            maxBuffer: 2 * 1024 * 1024,
+            windowsHide: true,
+          },
+        );
+        const stat = lstatSync(output);
+        if (!stat.isFile() || stat.size > 250 * 1024 * 1024) {
+          throw new Error('extracted member is not a bounded regular file');
+        }
+        if (process.platform !== 'win32') chmodSync(output, 0o755);
+      } catch (err) {
+        if (err instanceof VcmError) throw err;
+        throw new VcmError(
+          'TOOLCHAIN_INTEGRITY_FAILED',
+          `Could not safely unpack ${executable.tool} from ${artifact.id}. Clear the disposable runtime cache and run video-context-mcp setup again.`,
+        );
+      }
+      result.set(executable.tool, output);
+    }
     return result;
   }
 

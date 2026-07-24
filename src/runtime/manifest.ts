@@ -17,7 +17,7 @@ export interface RuntimeArtifact {
   url: string;
   sourceUrl: string;
   sha256: string;
-  format: 'file' | 'zip';
+  format: 'file' | 'zip' | 'tar.xz';
   maxDownloadBytes: number;
   license: string;
   executables: ArtifactExecutable[];
@@ -117,6 +117,35 @@ const windowsFfmpeg: RuntimeArtifact = {
   ],
 };
 
+const linuxFfmpeg: RuntimeArtifact = {
+  id: `ffmpeg-${FF_VERSION}-linux-x64-btbn-2026-06-30`,
+  version: FF_VERSION,
+  platform: 'linux',
+  arch: 'x64',
+  url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-30-13-34/ffmpeg-n8.1.2-21-gce3c09c101-linux64-gpl-8.1.tar.xz',
+  sourceUrl: 'https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-06-30-13-34',
+  sha256: '0ba73bbd93472c7622f6dec26d334c5e62e64d858d072490b2844320970456cd',
+  format: 'tar.xz',
+  maxDownloadBytes: 150 * 1024 * 1024,
+  license: 'GPL-3.0-or-later',
+  executables: [
+    {
+      tool: 'ffmpeg',
+      archivePath: '/bin/ffmpeg',
+      filename: 'ffmpeg',
+      versionArgs: ['-version'],
+      versionPattern: `version n?${FF_VERSION.replaceAll('.', '\\.')}`,
+    },
+    {
+      tool: 'ffprobe',
+      archivePath: '/bin/ffprobe',
+      filename: 'ffprobe',
+      versionArgs: ['-version'],
+      versionPattern: `version n?${FF_VERSION.replaceAll('.', '\\.')}`,
+    },
+  ],
+};
+
 /**
  * Release-pinned runtime artifacts. Updating any entry is a release change:
  * verify the upstream checksum, run the binary audit, update notices, and run
@@ -179,20 +208,7 @@ export const RUNTIME_ARTIFACTS: RuntimeArtifact[] = [
     'ffprobe',
     '5408ca588c8c72b0dde3afe676d0a7acf25ef97e55ae6eba5c7bede1cda42695',
   ),
-  martin(
-    'linux',
-    'x64',
-    '1783011670',
-    'ffmpeg',
-    '56452c0bfc4ee0325cd615d62f46ba8264f62eed34f727c2224c6c84fa7b8719',
-  ),
-  martin(
-    'linux',
-    'x64',
-    '1783011670',
-    'ffprobe',
-    'c6f2d36e98f9a4445fad0b0be539f4c4faf13fd502116bf131becd53f56cd390',
-  ),
+  linuxFfmpeg,
   windowsFfmpeg,
 ];
 

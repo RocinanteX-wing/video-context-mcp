@@ -34,6 +34,18 @@ describe('runtime manifest', () => {
   it('does not claim unsupported targets', () => {
     expect(artifactForTool('ffmpeg', 'linux', 'arm64')).toBeUndefined();
   });
+
+  it('uses one checksum-pinned GPL archive for both Linux FFmpeg tools', () => {
+    const ffmpeg = artifactForTool('ffmpeg', 'linux', 'x64');
+    const ffprobe = artifactForTool('ffprobe', 'linux', 'x64');
+    expect(ffmpeg).toBe(ffprobe);
+    expect(ffmpeg).toMatchObject({
+      format: 'tar.xz',
+      license: 'GPL-3.0-or-later',
+      sha256: '0ba73bbd93472c7622f6dec26d334c5e62e64d858d072490b2844320970456cd',
+    });
+    expect(ffmpeg?.url).toContain('/BtbN/FFmpeg-Builds/releases/download/');
+  });
 });
 
 describe('runtime archive safety', () => {
