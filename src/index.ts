@@ -23,6 +23,7 @@ import * as ingestVideo from './tools/ingest-video.js';
 import * as listVideos from './tools/list-videos.js';
 import * as peekFrame from './tools/peek-frame.js';
 import * as pruneCache from './tools/prune-cache.js';
+import * as repairEmbeddings from './tools/repair-embeddings.js';
 import * as searchVideos from './tools/search-videos.js';
 import type { Deps } from './tools/shared.js';
 import { SERVER_NAME, VERSION } from './version.js';
@@ -40,6 +41,7 @@ export function buildServer(deps: Deps): McpServer {
     listVideos,
     deleteVideo,
     pruneCache,
+    repairEmbeddings,
   ]) {
     server.registerTool(
       tool.name,

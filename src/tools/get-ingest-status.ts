@@ -51,7 +51,7 @@ export function handler(deps: Deps) {
       }
       if (row.stage === 'done' && row.error_code) {
         notes.push(
-          `Ingest completed with warnings: ${row.error_detail}. Everything else is usable; re-ingest with force=true to retry the failed sub-stage(s).`,
+          `Ingest completed with warnings: ${row.error_detail}. Everything else is usable.${row.error_detail?.includes('[EMBED_FAILED]') || row.error_code === 'EMBED_FAILED' ? ' Use repair_embeddings to rebuild semantic vectors without re-downloading the video.' : ' Re-ingest with force=true to retry the failed sub-stage(s).'}`,
         );
       }
       const maxFrameWidth = (
@@ -71,7 +71,7 @@ export function handler(deps: Deps) {
       }
       if (row.stage === 'done' && segments > 0 && row.embedded_count === null) {
         notes.push(
-          'This video predates semantic search — search_videos uses full-text only for it. Re-ingest with force=true to embed.',
+          'This video has no semantic vectors — search_videos uses full-text only for it. Call repair_embeddings to embed its stored transcript and OCR without re-ingesting.',
         );
       }
       if (row.stage === 'done' && segments === 0) {

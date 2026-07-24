@@ -79,6 +79,20 @@ describe.skipIf(!process.env.VCM_E2E)('e2e: real YouTube ingest', () => {
     expect(searchText).toContain(VIDEO);
     expect(searchText).not.toContain('semantic search unavailable');
 
+    const repaired = ingest.repairEmbeddings(VIDEO, true);
+    expect(repaired).toMatchObject({ stage: 'embed', cached: false, alreadyRunning: false });
+    await ingest.drain();
+    const repairedRow = db
+      .prepare('SELECT stage, embedded_count, error_detail FROM videos WHERE id = ?')
+      .get(VIDEO) as {
+      stage: string;
+      embedded_count: number | null;
+      error_detail: string | null;
+    };
+    expect(repairedRow.stage).toBe('done');
+    expect(repairedRow.embedded_count).toBeGreaterThan(0);
+    expect(repairedRow.error_detail).toBeNull();
+
     const released = await cache.releaseVideo(VIDEO);
     expect(released.cleanupPending).toBe(false);
     expect(db.prepare('SELECT id FROM videos WHERE id = ?').get(VIDEO)).toBeUndefined();

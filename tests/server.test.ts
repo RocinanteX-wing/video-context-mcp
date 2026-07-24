@@ -53,6 +53,7 @@ describe('MCP server over stdio', () => {
       'list_videos',
       'peek_frame',
       'prune_cache',
+      'repair_embeddings',
       'search_videos',
     ]);
     const timeline = tools.find((tool) => tool.name === 'get_video_timeline');
@@ -66,6 +67,17 @@ describe('MCP server over stdio', () => {
           ]),
         },
         chapters: { type: 'array' },
+      },
+    });
+    const transcript = tools.find((tool) => tool.name === 'get_transcript');
+    expect(transcript?.inputSchema).toMatchObject({
+      properties: { delivery: { enum: ['inline', 'file'] } },
+    });
+    expect(transcript?.outputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        truncated: { type: 'boolean' },
+        file_path: expect.any(Object),
       },
     });
   });

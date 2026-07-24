@@ -37,9 +37,43 @@ export interface StartResult {
   alreadyRunning: boolean;
 }
 
+export interface EmbedStats {
+  count: number;
+  vectorBytes: number;
+}
+
+export interface IngestManagerOps {
+  embedVideo?: (db: Database.Database, videoId: string, config: Config) => Promise<EmbedStats>;
+}
+
 const MAX_CONCURRENT = 2;
 const INGEST_LEASE_MS = 2 * 60_000;
 const HEARTBEAT_MS = 30_000;
+
+interface StoredWarning {
+  code: string;
+  message: string;
+}
+
+function storedWarnings(code: string | null, detail: string | null): StoredWarning[] {
+  if (!code || !detail) return [];
+  const matches = [...detail.matchAll(/\[([A-Z_]+)\]\s+(.+?)(?=\s+\|\s+\[[A-Z_]+\]\s+|$)/g)];
+  if (matches.length === 0) return [{ code, message: detail }];
+  return matches.map((match) => ({ code: match[1]!, message: match[2]! }));
+}
+
+function warningColumns(warnings: StoredWarning[]): {
+  errorCode: string | null;
+  errorDetail: string | null;
+} {
+  return {
+    errorCode: warnings[0]?.code ?? null,
+    errorDetail:
+      warnings.length === 0
+        ? null
+        : warnings.map((warning) => `[${warning.code}] ${warning.message}`).join(' | '),
+  };
+}
 
 /** Best-effort removal that never throws (cache cleanup must not crash jobs). */
 function safeRm(path: string): void {
@@ -61,6 +95,7 @@ export class IngestManager {
     private db: Database.Database,
     private config: Config,
     private cache = new CacheManager(db, config),
+    private ops: IngestManagerOps = {},
   ) {
     this.runtime = new RuntimeManager(config);
   }
@@ -160,6 +195,108 @@ export class IngestManager {
       });
     this.running.set(ref.id, job);
     return { videoId: ref.id, stage: 'pending', cached: false, alreadyRunning: false };
+  }
+
+  /**
+   * Rebuild only the semantic index from already-stored transcript/OCR rows.
+   * No source media, metadata, captions, frames, or OCR are fetched again.
+   */
+  repairEmbeddings(videoId: string, force = false): StartResult {
+    if (!/^[\w-]+$/.test(videoId)) {
+      throw new VcmError(
+        'NOT_INGESTED',
+        `No video with id "${videoId}" in the index. Call list_videos to find a repairable video.`,
+      );
+    }
+    if (this.running.has(videoId)) {
+      const row = this.db.prepare('SELECT stage FROM videos WHERE id = ?').get(videoId) as
+        | { stage: string }
+        | undefined;
+      return {
+        videoId,
+        stage: row?.stage ?? 'embed',
+        cached: false,
+        alreadyRunning: true,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const existing = this.db
+      .transaction((): StartResult | null => {
+        if (this.cache.hasPendingGc(videoId)) {
+          throw new VcmError(
+            'STAGE_NOT_READY',
+            `Cleanup is still finishing for ${videoId}. Retry repair_embeddings after prune_cache reports cleanup_pending=0.`,
+          );
+        }
+        const row = this.db
+          .prepare(
+            'SELECT stage, embedded_count, error_code, error_detail FROM videos WHERE id = ?',
+          )
+          .get(videoId) as
+          | {
+              stage: string;
+              embedded_count: number | null;
+              error_code: string | null;
+              error_detail: string | null;
+            }
+          | undefined;
+        if (!row) {
+          throw new VcmError(
+            'NOT_INGESTED',
+            `No video with id "${videoId}" in the index. Call ingest_video first, or list_videos to see what is available.`,
+          );
+        }
+        if (row.stage !== 'done') {
+          throw new VcmError(
+            'STAGE_NOT_READY',
+            `Cannot repair embeddings for ${videoId} while ingestion is at stage=${row.stage}. Wait for stage=done, or re-run a stalled ingest_video with force=true.`,
+          );
+        }
+        const hasEmbeddingWarning = storedWarnings(row.error_code, row.error_detail).some(
+          (warning) => warning.code === 'EMBED_FAILED',
+        );
+        if (row.embedded_count !== null && !hasEmbeddingWarning && !force) {
+          return {
+            videoId,
+            stage: 'done',
+            cached: true,
+            alreadyRunning: false,
+          };
+        }
+
+        this.db.prepare("UPDATE videos SET stage = 'embed' WHERE id = ?").run(videoId);
+        this.db
+          .prepare(
+            `INSERT INTO jobs
+               (video_id, stage, progress_pct, progress_detail, updated_at, owner_id, lease_until_ms)
+             VALUES (?, 'embed', 96, 'Rebuilding semantic index', ?, ?, ?)
+             ON CONFLICT(video_id) DO UPDATE SET
+               stage = 'embed', progress_pct = 96,
+               progress_detail = 'Rebuilding semantic index', updated_at = excluded.updated_at,
+               owner_id = excluded.owner_id, lease_until_ms = excluded.lease_until_ms`,
+          )
+          .run(videoId, now, this.ownerId, Date.now() + INGEST_LEASE_MS);
+        return null;
+      })
+      .immediate();
+    if (existing) {
+      if (existing.cached) this.cache.touchVideo(videoId);
+      return existing;
+    }
+
+    const heartbeat = setInterval(() => this.heartbeat(videoId), HEARTBEAT_MS);
+    heartbeat.unref();
+    const job = this.withSlot(() => this.runEmbeddingRepair(videoId))
+      .catch((err) => {
+        console.error(`[video-context-mcp] embedding repair ${videoId} crashed:`, err);
+      })
+      .finally(() => {
+        clearInterval(heartbeat);
+        this.running.delete(videoId);
+      });
+    this.running.set(videoId, job);
+    return { videoId, stage: 'embed', cached: false, alreadyRunning: false };
   }
 
   isRunning(videoId: string): boolean {
@@ -319,6 +456,74 @@ export class IngestManager {
     }
   }
 
+  private async embedStoredVideo(videoId: string): Promise<EmbedStats> {
+    if (this.ops.embedVideo) return this.ops.embedVideo(this.db, videoId, this.config);
+    const { embedVideo } = await import('./embed.js');
+    return embedVideo(this.db, videoId, this.config);
+  }
+
+  private updateEmbeddingWarning(videoId: string, replacement: VcmError | null): void {
+    const row = this.db
+      .prepare('SELECT error_code, error_detail FROM videos WHERE id = ?')
+      .get(videoId) as { error_code: string | null; error_detail: string | null };
+    const warnings = storedWarnings(row.error_code, row.error_detail).filter(
+      (warning) => warning.code !== 'EMBED_FAILED',
+    );
+    if (replacement) warnings.push({ code: replacement.code, message: replacement.message });
+    const columns = warningColumns(warnings);
+    this.db
+      .prepare('UPDATE videos SET error_code = ?, error_detail = ? WHERE id = ?')
+      .run(columns.errorCode, columns.errorDetail, videoId);
+  }
+
+  private async runEmbeddingRepair(videoId: string): Promise<void> {
+    try {
+      await this.maintainCache('pre_ingest', this.runningIds());
+      this.setProgress(videoId, 'embed', 96, 'Rebuilding semantic index');
+      const stats = await this.embedStoredVideo(videoId);
+      this.assertOwnsJob(videoId);
+      this.db
+        .transaction(() => {
+          this.updateEmbeddingWarning(videoId, null);
+          this.setProgress(videoId, 'done', 100);
+          this.db
+            .prepare(
+              "UPDATE videos SET stage = 'done', embedded_count = ?, vector_bytes = ?, last_accessed_at = ? WHERE id = ?",
+            )
+            .run(stats.count, stats.vectorBytes, new Date().toISOString(), videoId);
+        })
+        .immediate();
+    } catch (err) {
+      if (this.ownsJob(videoId)) {
+        const warning =
+          err instanceof VcmError
+            ? err
+            : new VcmError(
+                'EMBED_FAILED',
+                `Embedding repair failed (${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}). Run video-context-mcp doctor and setup --all, then retry repair_embeddings; full-text search remains available.`,
+              );
+        this.db
+          .transaction(() => {
+            this.updateEmbeddingWarning(videoId, warning);
+            this.setProgress(videoId, 'done', 100, 'Semantic indexing failed; full-text remains');
+            this.db.prepare("UPDATE videos SET stage = 'done' WHERE id = ?").run(videoId);
+          })
+          .immediate();
+      } else {
+        console.error(`[video-context-mcp] stopped stale embedding repair worker for ${videoId}`);
+      }
+    } finally {
+      try {
+        this.cache.refreshVideoUsage(videoId);
+      } catch (err) {
+        console.error(
+          `[video-context-mcp] cache accounting after embedding repair for ${videoId} failed: ${err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)}`,
+        );
+      }
+      await this.maintainCache('post_ingest', new Set([...this.runningIds(), videoId]));
+    }
+  }
+
   private async run(ref: VideoRef, opts: IngestOptions): Promise<void> {
     const videoDir = join(this.config.cacheDir, ref.id);
     const workDir = join(videoDir, 'tmp');
@@ -422,8 +627,7 @@ export class IngestManager {
         this.setStage(ref.id, 'embed', 96);
         try {
           // Dynamic import: the ONNX runtime stays unloaded unless needed.
-          const { embedVideo } = await import('./embed.js');
-          const stats = await embedVideo(this.db, ref.id, this.config);
+          const stats = await this.embedStoredVideo(ref.id);
           this.assertOwnsJob(ref.id);
           this.db
             .prepare('UPDATE videos SET embedded_count = ?, vector_bytes = ? WHERE id = ?')
