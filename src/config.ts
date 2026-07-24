@@ -7,6 +7,9 @@ export type AsrBackend = 'auto' | 'native' | 'transformers';
 
 export type BinaryName = 'ytdlp' | 'ffmpeg' | 'ffprobe' | 'tesseract' | 'whisper';
 
+export const DEFAULT_EMBED_MODEL = 'Xenova/all-MiniLM-L6-v2';
+export const DEFAULT_EMBED_REVISION = '751bff37182d3f1213fa05d7196b954e230abad9';
+
 export interface Config {
   cacheDir: string;
   cookiesFile?: string;
@@ -76,7 +79,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.VCM_WHISPER_BIN) binaryOverrides.whisper = expandHome(env.VCM_WHISPER_BIN);
 
   const asrModel = env.VCM_ASR_MODEL ?? 'Xenova/whisper-base.en';
-  const embedModel = env.VCM_EMBED_MODEL ?? 'Xenova/all-MiniLM-L6-v2';
+  const embedModel = env.VCM_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
   return {
     cacheDir: rawCache,
     cookiesFile: env.YTDLP_COOKIES_FILE ? expandHome(env.YTDLP_COOKIES_FILE) : undefined,
@@ -108,9 +111,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     embedModel,
     embedRevision:
       env.VCM_EMBED_REVISION ??
-      (embedModel === 'Xenova/all-MiniLM-L6-v2'
-        ? '751bff37182d3f1213fa05d7196b954e230abad9'
-        : 'main'),
+      (embedModel === DEFAULT_EMBED_MODEL ? DEFAULT_EMBED_REVISION : 'main'),
     maxVideoHeight: num(env.VCM_MAX_VIDEO_HEIGHT, 720),
     sceneThreshold: num(env.VCM_SCENE_THRESHOLD, 0.3),
     minFrameGapS: num(env.VCM_MIN_FRAME_GAP_S, 10),

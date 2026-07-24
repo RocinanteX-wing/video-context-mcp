@@ -1,17 +1,37 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import type { FeatureExtractionPipeline } from '@huggingface/transformers';
+import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import {
+  DEFAULT_EMBED_ARTIFACT,
+  type EmbeddingCacheHealth,
   buildEmbedDocs,
+  createEmbeddingModelLoader,
   deleteVideoVectors,
+  inspectEmbeddingCache,
+  isEmbeddingParseFailure,
   loadEmbedFrames,
   optimizeVectors,
+  removeInvalidEmbeddingArtifact,
   replaceVideoVectors,
   searchVectors,
 } from '../src/pipeline/embed.js';
+
+function cacheHealth(state: EmbeddingCacheHealth['state']): EmbeddingCacheHealth {
+  return {
+    state,
+    model: DEFAULT_EMBED_ARTIFACT.model,
+    revision: DEFAULT_EMBED_ARTIFACT.revision,
+    path: '/tmp/model_quantized.onnx',
+    expectedSize: DEFAULT_EMBED_ARTIFACT.size,
+    actualSize: state === 'not_cached' ? null : DEFAULT_EMBED_ARTIFACT.size,
+    sha256: state === 'verified' ? DEFAULT_EMBED_ARTIFACT.sha256 : null,
+    remediation: state === 'verified' ? null : 'retry',
+  };
+}
 
 describe('buildEmbedDocs', () => {
   it('builds speech docs from segments and screen docs from OCR-rich frames', () => {
@@ -91,5 +111,147 @@ describe('buildEmbedDocs', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('embedding model cache', () => {
+  it('reports missing and truncated default artifacts without loading ONNX', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vcm-embed-health-'));
+    const config = loadConfig({ VCM_CACHE_DIR: dir });
+    const path = join(
+      dir,
+      'transformers',
+      DEFAULT_EMBED_ARTIFACT.model,
+      DEFAULT_EMBED_ARTIFACT.revision,
+      DEFAULT_EMBED_ARTIFACT.relativePath,
+    );
+    try {
+      expect(await inspectEmbeddingCache(config)).toMatchObject({
+        state: 'not_cached',
+        path,
+        expectedSize: DEFAULT_EMBED_ARTIFACT.size,
+      });
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, 'truncated model');
+      expect(await inspectEmbeddingCache(config)).toMatchObject({
+        state: 'invalid',
+        path,
+        actualSize: 15,
+      });
+      await removeInvalidEmbeddingArtifact(config);
+      expect(await inspectEmbeddingCache(config)).toMatchObject({ state: 'not_cached', path });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never follows cache-internal symlinks while recovering an artifact', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vcm-embed-symlink-'));
+    const outside = mkdtempSync(join(tmpdir(), 'vcm-embed-outside-'));
+    const config = loadConfig({ VCM_CACHE_DIR: dir });
+    const revisionDir = join(
+      dir,
+      'transformers',
+      DEFAULT_EMBED_ARTIFACT.model,
+      DEFAULT_EMBED_ARTIFACT.revision,
+    );
+    const outsideModel = join(outside, 'model_quantized.onnx');
+    try {
+      mkdirSync(revisionDir, { recursive: true });
+      writeFileSync(outsideModel, 'must survive');
+      symlinkSync(outside, join(revisionDir, 'onnx'), 'dir');
+      expect(await inspectEmbeddingCache(config)).toMatchObject({ state: 'invalid' });
+      await expect(removeInvalidEmbeddingArtifact(config)).rejects.toThrow('symbolic link');
+      expect(existsSync(outsideModel)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('single-flights concurrent first loads', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vcm-embed-loader-'));
+    const config = loadConfig({ VCM_CACHE_DIR: dir });
+    const fakePipeline = (() => undefined) as unknown as FeatureExtractionPipeline;
+    let initializeCount = 0;
+    let acquireCount = 0;
+    let releaseCount = 0;
+    let resolveInitialize!: (pipeline: FeatureExtractionPipeline) => void;
+    const initialize = new Promise<FeatureExtractionPipeline>((resolve) => {
+      resolveInitialize = resolve;
+    });
+    const loader = createEmbeddingModelLoader({
+      initialize: async () => {
+        initializeCount++;
+        return initialize;
+      },
+      inspect: async () => cacheHealth('verified'),
+      removeInvalid: async () => undefined,
+      acquire: async () => {
+        acquireCount++;
+        return { release: () => releaseCount++ };
+      },
+    });
+
+    const first = loader(config);
+    const second = loader(config);
+    await vi.waitFor(() => expect(initializeCount).toBe(1));
+    resolveInitialize(fakePipeline);
+    expect(await Promise.all([first, second])).toEqual([fakePipeline, fakePipeline]);
+    expect(acquireCount).toBe(1);
+    expect(releaseCount).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('removes an invalid artifact and retries one protobuf load failure', async () => {
+    const config = loadConfig({ VCM_CACHE_DIR: '/tmp/vcm-embed-recovery-test' });
+    const fakePipeline = (() => undefined) as unknown as FeatureExtractionPipeline;
+    let state: EmbeddingCacheHealth['state'] = 'verified';
+    let initializeCount = 0;
+    let removeCount = 0;
+    const loader = createEmbeddingModelLoader({
+      initialize: async () => {
+        initializeCount++;
+        if (initializeCount === 1) {
+          state = 'invalid';
+          throw new Error('Protobuf parsing failed.');
+        }
+        state = 'verified';
+        return fakePipeline;
+      },
+      inspect: async () => cacheHealth(state),
+      removeInvalid: async () => {
+        removeCount++;
+        state = 'not_cached';
+      },
+      acquire: async () => ({ release: () => undefined }),
+    });
+
+    expect(await loader(config)).toBe(fakePipeline);
+    expect(initializeCount).toBe(2);
+    expect(removeCount).toBe(1);
+  });
+
+  it('does not delete a checksum-valid artifact and clears rejected memoization', async () => {
+    const config = loadConfig({ VCM_CACHE_DIR: '/tmp/vcm-embed-valid-retry-test' });
+    let initializeCount = 0;
+    let removeCount = 0;
+    const loader = createEmbeddingModelLoader({
+      initialize: async () => {
+        initializeCount++;
+        throw new Error('Load model failed: Protobuf parsing failed.');
+      },
+      inspect: async () => cacheHealth('verified'),
+      removeInvalid: async () => {
+        removeCount++;
+      },
+      acquire: async () => ({ release: () => undefined }),
+    });
+
+    await expect(loader(config)).rejects.toThrow('passed checksum validation');
+    await expect(loader(config)).rejects.toThrow('passed checksum validation');
+    expect(initializeCount).toBe(4);
+    expect(removeCount).toBe(0);
+    expect(isEmbeddingParseFailure(new Error('Protobuf parsing failed.'))).toBe(true);
   });
 });

@@ -342,8 +342,10 @@ export class IngestManager {
         const meta = await fetchYoutubeMetadata(ref, this.config);
         this.assertOwnsJob(ref.id);
         this.db
-          .prepare('UPDATE videos SET title = ?, channel = ?, duration_s = ? WHERE id = ?')
-          .run(meta.title, meta.channel, meta.durationS, ref.id);
+          .prepare(
+            'UPDATE videos SET title = ?, channel = ?, upload_date = ?, duration_s = ? WHERE id = ?',
+          )
+          .run(meta.title, meta.channel, meta.uploadDate, meta.durationS, ref.id);
         this.applyChapters(ref.id, meta.chapters);
 
         this.setStage(ref.id, 'transcript', 25);

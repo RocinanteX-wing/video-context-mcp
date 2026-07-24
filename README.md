@@ -57,13 +57,18 @@ video-context-mcp setup --update # explicitly activate this release's pinned too
 video-context-mcp doctor         # read-only health and remediation report
 ```
 
+`doctor --json` also reports the embedding model cache as `not_cached`,
+`verified`, `invalid`, or `custom_unverified`. The default pinned MiniLM ONNX
+artifact is size- and SHA-256-checked; an invalid copy is replaced once on the
+next embedding load while full-text search remains available.
+
 ## Tools
 
 | Tool | Purpose |
 |---|---|
 | `ingest_video` | Index a YouTube URL/ID or local file (async job, returns immediately) |
 | `get_ingest_status` | Stage, progress, what's queryable, actionable errors |
-| `get_video_timeline` | Compact overview: chapters + sampled transcript outline |
+| `get_video_timeline` | Compact overview: structured metadata + Markdown chapters/outline |
 | `get_transcript` | Timestamped transcript, sliceable by range |
 | `search_videos` | Hybrid search (full-text + semantic, RRF-fused) over speech AND on-screen text |
 | `peek_frame` | The keyframe image nearest a timestamp + its OCR text — *you* look at it |
@@ -105,6 +110,7 @@ startup or `setup` run after they have remained inactive for at least one hour.
 - **Phase 2 (shipped):** keyframes, lazy frame inspection, and native/WASM OCR into search. Known limitation: YouTube's SABR streaming experiment can cap downloads at 360p, degrading code OCR — surfaced as a note in `get_ingest_status`.
 - **Phase 3 (shipped):** local ASR fallback — `ingest_video(…, whisper_fallback=true)` uses native whisper.cpp when explicitly configured or quantized Transformers.js Base.en otherwise; failures downgrade to warnings without sinking the ingest
 - **Phase 4 (shipped):** hybrid dense+lexical search — ONNX embeddings (`Xenova/all-MiniLM-L6-v2` by default) in LanceDB, fused with FTS5 by reciprocal rank
+- **Timeline API:** `get_video_timeline` keeps its human-readable Markdown content and also returns MCP `structuredContent` with duration, uploader channel, upload date, chapters, transcript source/outline, and frame counts
 - **Phase 5 (shipped):** self-contained, checksummed runtime provisioning with setup/doctor commands and four-platform package validation
 - **Phase 6 (this release):** explicit working-set release plus whole-video quota LRU with retryable cross-store cleanup
 - **Phase 7 (experimental):** on-screen code diff reconstruction, diagram→Mermaid, deictic alignment

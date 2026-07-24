@@ -55,6 +55,19 @@ describe('MCP server over stdio', () => {
       'prune_cache',
       'search_videos',
     ]);
+    const timeline = tools.find((tool) => tool.name === 'get_video_timeline');
+    expect(timeline?.outputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        duration_seconds: {
+          anyOf: expect.arrayContaining([
+            expect.objectContaining({ type: 'number' }),
+            expect.objectContaining({ type: 'null' }),
+          ]),
+        },
+        chapters: { type: 'array' },
+      },
+    });
   });
 
   it('list_videos works on an empty index', async () => {

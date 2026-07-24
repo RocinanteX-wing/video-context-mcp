@@ -29,10 +29,10 @@ describe('db', () => {
 
   it('migrates a fresh database and is idempotent on reopen', () => {
     expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
-    expect(db.pragma('user_version', { simple: true })).toBe(7);
+    expect(db.pragma('user_version', { simple: true })).toBe(8);
     db.close();
     db = openDb(dir); // second open must not re-run DDL
-    expect(db.pragma('user_version', { simple: true })).toBe(7);
+    expect(db.pragma('user_version', { simple: true })).toBe(8);
     const columns = db.pragma('table_info(jobs)') as { name: string }[];
     expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
     expect(columns.map((column) => column.name)).toEqual(
@@ -42,6 +42,7 @@ describe('db', () => {
     expect(videoColumns.map((column) => column.name)).toEqual(
       expect.arrayContaining(['last_accessed_at', 'asset_bytes', 'vector_bytes']),
     );
+    expect(videoColumns.some((column) => column.name === 'upload_date')).toBe(true);
     expect(
       db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='cache_gc'").get(),
     ).toBeDefined();
@@ -68,11 +69,12 @@ describe('db', () => {
     legacy.close();
 
     db = openDb(dir);
-    expect(db.pragma('user_version', { simple: true })).toBe(7);
+    expect(db.pragma('user_version', { simple: true })).toBe(8);
     const columns = db.pragma('table_info(jobs)') as { name: string }[];
     expect(columns.some((column) => column.name === 'progress_detail')).toBe(true);
     const videoColumns = db.pragma('table_info(videos)') as { name: string }[];
     expect(videoColumns.some((column) => column.name === 'last_accessed_at')).toBe(true);
+    expect(videoColumns.some((column) => column.name === 'upload_date')).toBe(true);
   });
 
   it('upgrades an applied v6 database with ingest leases in v7', () => {
@@ -80,6 +82,7 @@ describe('db', () => {
     rmSync(join(dir, 'index.sqlite'), { force: true });
     const legacy = new Database(join(dir, 'index.sqlite'));
     legacy.exec(`
+      CREATE TABLE videos (id TEXT PRIMARY KEY);
       CREATE TABLE jobs (
         video_id TEXT PRIMARY KEY, stage TEXT NOT NULL,
         progress_pct REAL NOT NULL DEFAULT 0, progress_detail TEXT,
@@ -90,7 +93,7 @@ describe('db', () => {
     legacy.close();
 
     db = openDb(dir);
-    expect(db.pragma('user_version', { simple: true })).toBe(7);
+    expect(db.pragma('user_version', { simple: true })).toBe(8);
     const columns = db.pragma('table_info(jobs)') as { name: string }[];
     expect(columns.map((column) => column.name)).toEqual(
       expect.arrayContaining(['owner_id', 'lease_until_ms']),

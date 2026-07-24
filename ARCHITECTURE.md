@@ -22,9 +22,14 @@ Each stage commits rows as it finishes, so partial results are queryable mid-ing
 
 `~/.cache/video-context-mcp/` holds a single `index.sqlite` (WAL, FK cascade) plus one directory per video (`<id>/frames/` in Phase 2; `tmp/` during ingest, deleted after). Source media is never retained — only derived artifacts.
 
-Tables: `videos` (identity + stage + error), `jobs` (progress), `segments` (+ `segments_fts` FTS5 external-content, porter), `chapters`, and Phase-2-ready `frames` / `ocr_blocks`. Content addressing: YouTube ID as-is; local files → `local-<sha256(size+head8MB)[:12]>`.
+Tables: `videos` (identity, title/channel/upload date, stage, and error), `jobs` (progress), `segments` (+ `segments_fts` FTS5 external-content, porter), `chapters`, and Phase-2-ready `frames` / `ocr_blocks`. Content addressing: YouTube ID as-is; local files → `local-<sha256(size+head8MB)[:12]>`.
 
 Phase 4 adds dense embeddings in LanceDB beside the sqlite file (same pattern as `semantic-code-mcp`), fused with FTS via RRF.
+
+Default embedding initialization is single-flight within a process and protected
+by a cross-process lease. The pinned ONNX artifact is checksum-validated; only
+the exact invalid model file is removed and retried once. Semantic failures
+remain warnings, and search continues with SQLite FTS.
 
 ## Error taxonomy
 

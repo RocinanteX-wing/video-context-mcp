@@ -43,7 +43,11 @@ export function buildServer(deps: Deps): McpServer {
   ]) {
     server.registerTool(
       tool.name,
-      { description: tool.description, inputSchema: tool.inputSchema },
+      {
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        outputSchema: 'outputSchema' in tool ? tool.outputSchema : undefined,
+      },
       // biome-ignore lint/suspicious/noExplicitAny: each tool validates via its own Zod schema
       tool.handler(deps) as any,
     );

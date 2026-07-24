@@ -206,6 +206,12 @@ function migrate(db: Database.Database): void {
       db.pragma('user_version = 7');
     })();
   }
+  if (version < 8) {
+    db.transaction(() => {
+      db.exec('ALTER TABLE videos ADD COLUMN upload_date TEXT');
+      db.pragma('user_version = 8');
+    })();
+  }
 }
 
 /**

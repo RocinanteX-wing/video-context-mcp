@@ -122,12 +122,15 @@ export async function runCli(argv: string[]): Promise<number | null> {
     const components = await Promise.all(
       (['ytdlp', 'ffmpeg', 'ffprobe'] as const).map((tool) => runtime.doctorTool(tool)),
     );
+    const { inspectEmbeddingCache } = await import('./pipeline/embed.js');
+    const embeddingHealth = await inspectEmbeddingCache(config);
     const nodeMajor = Number(process.versions.node.split('.')[0]);
     const nodeReady = nodeMajor >= 22;
     const result = {
       ready:
         nodeReady &&
-        components.every((component) => ['ready', 'update_available'].includes(component.state)),
+        components.every((component) => ['ready', 'update_available'].includes(component.state)) &&
+        embeddingHealth.state !== 'invalid',
       platform: `${process.platform}/${process.arch}`,
       node: {
         state: nodeReady ? 'ready' : 'invalid',
@@ -149,6 +152,16 @@ export async function runCli(argv: string[]): Promise<number | null> {
           revision: config.asrRevision,
           cache_ready: existsSync(join(config.cacheDir, 'transformers')),
         },
+        embeddings: {
+          model: embeddingHealth.model,
+          revision: embeddingHealth.revision,
+          cache_state: embeddingHealth.state,
+          path: embeddingHealth.path,
+          expected_bytes: embeddingHealth.expectedSize,
+          actual_bytes: embeddingHealth.actualSize,
+          sha256: embeddingHealth.sha256,
+          remediation: embeddingHealth.remediation,
+        },
       },
     };
     if (json) console.log(JSON.stringify(result));
@@ -161,6 +174,10 @@ export async function runCli(argv: string[]): Promise<number | null> {
         );
         if (component.remediation) console.error(`  ${component.remediation}`);
       }
+      console.error(
+        `embeddings: ${embeddingHealth.state} (${embeddingHealth.model}@${embeddingHealth.revision})${embeddingHealth.path ? ` — ${embeddingHealth.path}` : ''}`,
+      );
+      if (embeddingHealth.remediation) console.error(`  ${embeddingHealth.remediation}`);
     }
     return result.ready ? 0 : 1;
   } catch (err) {

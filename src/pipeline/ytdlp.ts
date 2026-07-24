@@ -26,10 +26,28 @@ export interface CaptionTrack {
 export interface VideoMetadata {
   title: string;
   channel: string | null;
+  uploadDate: string | null;
   durationS: number | null;
   chapters: ChapterInfo[];
   manualCaptionLangs: string[];
   autoCaptionLangs: string[];
+}
+
+/** Normalize yt-dlp's YYYYMMDD value; reject impossible calendar dates. */
+export function normalizeUploadDate(value: unknown): string | null {
+  if (typeof value !== 'string' || !/^\d{8}$/.test(value)) return null;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(4, 6));
+  const day = Number(value.slice(6, 8));
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
 }
 
 export function buildYtdlpArgs(args: string[], config: Config): string[] {
@@ -81,6 +99,7 @@ export async function fetchYoutubeMetadata(ref: VideoRef, config: Config): Promi
   return {
     title: typeof info.title === 'string' ? info.title : ref.id,
     channel: typeof info.channel === 'string' ? info.channel : null,
+    uploadDate: normalizeUploadDate(info.upload_date),
     durationS: typeof info.duration === 'number' ? info.duration : null,
     chapters: chaptersRaw
       .filter((c) => typeof c.start_time === 'number' && typeof c.title === 'string')

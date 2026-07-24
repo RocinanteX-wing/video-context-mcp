@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { VcmError } from '../errors.js';
+import { type ErrorCode, VcmError } from '../errors.js';
 
 export const RUNTIME_LOCK_TIMEOUT_MS = 15 * 60_000;
 export const RUNTIME_LOCK_STALE_MS = 5 * 60_000;
@@ -19,6 +19,9 @@ export interface RuntimeLockOptions {
   staleMs?: number;
   heartbeatMs?: number;
   pollMs?: number;
+  /** User-facing description and error code when the lease guards a non-runtime artifact. */
+  subject?: string;
+  errorCode?: ErrorCode;
 }
 
 function delay(ms: number): Promise<void> {
@@ -76,10 +79,12 @@ export async function acquireRuntimeLock(
   id: string,
   options: RuntimeLockOptions = {},
 ): Promise<RuntimeLock> {
+  const subject = options.subject ?? `managed runtime ${id}`;
+  const errorCode = options.errorCode ?? 'TOOLCHAIN_DOWNLOAD_FAILED';
   if (!/^[\w.-]+$/.test(id)) {
     throw new VcmError(
-      'TOOLCHAIN_INTEGRITY_FAILED',
-      `Unsafe managed runtime id: ${id.slice(0, 160)}.`,
+      options.errorCode ?? 'TOOLCHAIN_INTEGRITY_FAILED',
+      `Unsafe cache-artifact id: ${id.slice(0, 160)}.`,
     );
   }
   const timeoutMs = options.timeoutMs ?? RUNTIME_LOCK_TIMEOUT_MS;
@@ -119,8 +124,8 @@ export async function acquireRuntimeLock(
       const assertOwned = (): void => {
         if (released || readOwner(lockPath) !== token) {
           throw new VcmError(
-            'TOOLCHAIN_DOWNLOAD_FAILED',
-            `Lost the managed runtime installation lock for ${id}. Another process may be recovering it; retry setup.`,
+            errorCode,
+            `Lost the installation lock for ${subject}. Another process may be recovering it; retry.`,
           );
         }
       };
@@ -142,8 +147,8 @@ export async function acquireRuntimeLock(
       breakStaleLock(lockPath, staleMs);
       if (Date.now() - started > timeoutMs) {
         throw new VcmError(
-          'TOOLCHAIN_DOWNLOAD_FAILED',
-          `Timed out waiting for another process to install ${id}. Run video-context-mcp doctor and retry.`,
+          errorCode,
+          `Timed out waiting for another process to prepare ${subject}. Run video-context-mcp doctor and retry.`,
         );
       }
       await delay(pollMs);

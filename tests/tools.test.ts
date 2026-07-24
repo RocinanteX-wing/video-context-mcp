@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { CacheManager } from '../src/cache.js';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
@@ -82,10 +83,37 @@ describe('tool handlers on partial/seeded state', () => {
   });
 
   it('get_video_timeline serves metadata mid-ingest with a state note', async () => {
+    db.prepare('UPDATE videos SET channel = ?, upload_date = ? WHERE id = ?').run(
+      'Example Channel',
+      '2026-07-24',
+      VID,
+    );
+    db.prepare('INSERT INTO chapters (video_id, start_ms, title) VALUES (?, 30000, ?)').run(
+      VID,
+      'Second act',
+    );
+    db.prepare(
+      "INSERT INTO frames (video_id, ts_ms, path, width, height, class) VALUES (?, 1000, '/tmp/frame.jpg', 1280, 720, 'code')",
+    ).run(VID);
     const res = await getVideoTimeline.handler(deps)({ video_id: VID });
     const out = text(res as never);
     expect(out).toContain('Partial Video');
     expect(out).toContain('ingest in progress');
+    const structured = (res as { structuredContent: Record<string, unknown> }).structuredContent;
+    expect(() => z.object(getVideoTimeline.outputSchema).parse(structured)).not.toThrow();
+    expect(structured).toMatchObject({
+      video_id: VID,
+      title: 'Partial Video',
+      uploader_channel: 'Example Channel',
+      upload_date: '2026-07-24',
+      duration_seconds: 120,
+      captions: { language: 'en', automatic: true },
+      transcript: { source: 'captions', segment_count: 1 },
+      chapters: [{ title: 'Second act', start_seconds: 30, timestamp: '0:30' }],
+      frames: { total: 1, by_class: [{ class: 'code', count: 1 }] },
+      stage: 'frames',
+    });
+    expect(structured.state_note).toContain('ingest in progress');
   });
 
   it('get_transcript rejects inverted ranges', async () => {

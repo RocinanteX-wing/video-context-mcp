@@ -17,6 +17,7 @@ export interface VideoRow {
   source_url: string;
   title: string | null;
   channel: string | null;
+  upload_date: string | null;
   duration_s: number | null;
   captions_lang: string | null;
   captions_auto: number | null;
