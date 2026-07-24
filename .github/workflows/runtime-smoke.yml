@@ -23,8 +23,6 @@ jobs:
             os: macos-14
           - target: macos-x64
             os: macos-15-intel
-    env:
-      VCM_CACHE_DIR: ${{ runner.temp }}/video-context-mcp-smoke
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -34,4 +32,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: node dist/index.js setup --json
+        env:
+          VCM_CACHE_DIR: ${{ runner.temp }}/video-context-mcp-smoke
       - run: node dist/index.js doctor --json
+        env:
+          VCM_CACHE_DIR: ${{ runner.temp }}/video-context-mcp-smoke

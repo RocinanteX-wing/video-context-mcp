@@ -195,4 +195,4 @@ Use `npm run demo` for the network-gated terminal walkthrough. See
 [`SECURITY.md`](SECURITY.md) for private reporting, and
 [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
-MIT © Small Thinking Machines
+MIT © Studio1804, Small Thinking Machines, and Ricardo Ledan

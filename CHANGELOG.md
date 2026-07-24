@@ -28,3 +28,5 @@ All notable changes to this project will be documented here. The format follows
   majors instead of deprecated Node 20-based releases.
 - Monthly Dependabot batches are limited to minor and patch updates; major
   upgrades remain explicit compatibility work.
+- Managed runtime smoke tests resolve their isolated cache path after a runner
+  is assigned, allowing GitHub to validate and schedule the workflow.
