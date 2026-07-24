@@ -26,3 +26,5 @@ All notable changes to this project will be documented here. The format follows
   so formatting checks are deterministic on Windows.
 - GitHub workflows use the current Node 24-based checkout and setup-node action
   majors instead of deprecated Node 20-based releases.
+- Monthly Dependabot batches are limited to minor and patch updates; major
+  upgrades remain explicit compatibility work.
