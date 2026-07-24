@@ -27,7 +27,8 @@ All notable changes to this project will be documented here. The format follows
 - GitHub workflows use the current Node 24-based checkout and setup-node action
   majors instead of deprecated Node 20-based releases.
 - Monthly Dependabot batches are limited to minor and patch updates; major
-  upgrades remain explicit compatibility work.
+  upgrades remain explicit compatibility work. Pre-1.0 LanceDB minor upgrades
+  also remain manual until their native packages cover every supported target.
 - Managed runtime smoke tests resolve their isolated cache path after a runner
   is assigned, allowing GitHub to validate and schedule the workflow.
 - Linux managed FFmpeg now uses one checksum-pinned GPL BtbN archive for both

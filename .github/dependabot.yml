@@ -11,6 +11,8 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "@lancedb/lancedb"
+        update-types: ["version-update:semver-minor"]
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: /
