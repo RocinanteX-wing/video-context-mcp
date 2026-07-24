@@ -18,6 +18,9 @@ All notable changes to this project will be documented here. The format follows
 
 - Embedding failures now direct agents to selective repair instead of a full
   forced re-ingest.
+- LanceDB is pinned to the latest stable release that publishes native binaries
+  for every supported CI platform, including Intel macOS.
 - Documentation now describes supported platforms and common first-run
   remediation.
-
+- Repository text files are checked out with LF line endings on every platform
+  so formatting checks are deterministic on Windows.
