@@ -8,7 +8,48 @@ Model-agnostic MCP server that turns videos into an **interactive, queryable kno
 
 Most video tools for agents either lock you to one model provider or eagerly dump dozens of frames into context. `video-context-mcp` treats a video like a filesystem: ingest once, then let the agent pull exactly the slice it needs — a timeline overview, a transcript range, a search hit, or a single frame at a timestamp.
 
-![A terminal walkthrough of ingest, timeline, transcript, search, and cleanup](docs/assets/demo.gif)
+## Demo
+
+The assistant retrieves timestamped video evidence through the Video Context MCP before composing its answer.
+
+![Terminal demonstration of an LLM using the Video Context MCP to retrieve evidence and explain the difference between Pydantic and ontology validation](docs/assets/demo.gif)
+
+<details>
+<summary>Text transcript</summary>
+
+**User:** Using Coyle’s refund example, identify an output from `run_tool()` that could pass Pydantic validation but
+fail the ontology output check. Why can’t Pydantic detect the problem, and what additional guarantee does the ontology
+provide?
+
+**Assistant:** Searching the indexed video for Coyle’s refund example…
+
+```text
+video-context.search_videos
+  video: Sir59K8ZDPU
+  query: "Pydantic ontology refund example"
+
+18:43  “Pydantic in, ontology out”
+19:11  “A second refund on the same order is a problem”
+
+video-context.get_transcript
+  range: 18:43–19:20
+```
+
+**Assistant:** A possible output is:
+
+```text
+run_tool() → second refund on the same order
+```
+
+This can pass Pydantic if the refund parameters have the expected types. Pydantic validates those types; it does not
+know that another refund already exists for the same order.
+
+The ontology checks the result against domain relationships and rules. It can reject the second refund, providing
+semantic consistency beyond valid data types.
+
+_Answer grounded in video evidence at 18:43 and 19:11. This animation is a deterministic replay, not a live model call._
+
+</details>
 
 ## Requirements
 
