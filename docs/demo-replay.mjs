@@ -6,10 +6,8 @@
 const ESC = '\u001b[';
 const color = {
   reset: `${ESC}0m`,
-  bold: `${ESC}1m`,
   cyan: `${ESC}38;2;137;220;235m`,
   blue: `${ESC}38;2;137;180;250m`,
-  green: `${ESC}38;2;166;227;161m`,
   mauve: `${ESC}38;2;203;166;247m`,
   peach: `${ESC}38;2;250;179;135m`,
   text: `${ESC}38;2;205;214;244m`,
@@ -41,89 +39,94 @@ function clear() {
 await sleep(250);
 clear();
 
-line(`${color.bold}${color.cyan}❯ User${color.reset}`);
 await typeLines(
   [
-    'Using Coyle’s refund example, identify an output from run_tool()',
-    'that could pass Pydantic validation but fail the ontology output',
-    'check. Why can’t Pydantic detect the problem, and what additional',
-    'guarantee does the ontology provide?',
+    `${color.cyan}›${color.reset} Use video-context-mcp to investigate Coyle’s refund example.`,
+    '  What does it reveal about the difference between Pydantic checks',
+    '  and ontology checks? Give a concrete answer and cite the relevant',
+    '  speech and on-screen timestamps.',
   ].map((value) => `${color.text}${value}${color.reset}`),
-  5,
+  7,
 );
 
-await sleep(900);
+await sleep(1_400);
 clear();
-await type(
-  `${color.bold}${color.mauve}● Assistant${color.reset}  Searching the indexed video for Coyle’s refund example…`,
-  5,
+await typeLines(
+  [
+    `${color.mauve}•${color.reset} I’ll query the indexed video for Coyle’s refund example and use`,
+    '  the matching transcript and slide evidence.',
+  ].map((value) => `${color.text}${value}${color.reset}`),
+  7,
 );
-line();
 await sleep(500);
 line();
-line(`${color.blue}video-context.search_videos${color.reset}`);
-line(`  ${color.muted}video:${color.reset} Sir59K8ZDPU`);
-line(`  ${color.muted}query:${color.reset} "Pydantic ontology refund example"`);
+line(
+  `${color.mauve}• Calling${color.reset} ${color.blue}video-context.search_videos${color.reset}`,
+);
+line(`    ${color.muted}video:${color.reset} Sir59K8ZDPU`);
+line(`    ${color.muted}query:${color.reset} "Coyle refund Pydantic ontology validation"`);
 
 await sleep(850);
 line();
-line(`${color.green}✓ 2 relevant moments${color.reset}`);
-await sleep(350);
-await type(`${color.peach}18:43${color.reset}  “Pydantic in, ontology out”`, 7);
+await type(
+  `  └ ${color.peach}18:14${color.reset}  ${color.muted}speech ·${color.reset} Check types with Pydantic; results with ontology`,
+  7,
+);
 line();
 await sleep(650);
 await type(
-  `${color.peach}19:11${color.reset}  “A second refund on the same order is a problem”`,
+  `    ${color.peach}18:43${color.reset}  ${color.muted}screen ·${color.reset} “Pydantic in, ontology out”`,
+  7,
+);
+line();
+await sleep(650);
+await type(
+  `    ${color.peach}19:11${color.reset}  ${color.muted}speech ·${color.reset} “A second refund on the same order is a problem”`,
   7,
 );
 line();
 
 await sleep(700);
 line();
-line(`${color.blue}video-context.get_transcript${color.reset}`);
-await type(`  ${color.muted}range:${color.reset} 18:43–19:20`, 7);
+line(
+  `${color.mauve}• Calling${color.reset} ${color.blue}video-context.get_transcript${color.reset}`,
+);
+await type(`    ${color.muted}range:${color.reset} 17:45–19:20`, 7);
 line();
-await sleep(900);
+await sleep(1_100);
 
 clear();
-line(
-  `${color.bold}${color.green}━━━ GROUNDED ANSWER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${color.reset}`,
-);
-line();
-await type(`${color.bold}A possible output is:${color.reset}`, 6);
-line();
-line();
-
-await type(
-  `${color.mauve}run_tool()${color.reset} → ${color.green}second refund on the same order${color.reset}`,
-  7,
-);
-line();
-
-line();
 await typeLines(
   [
-    'This can pass Pydantic if the refund parameters have the',
-    'expected types. Pydantic validates those types; it does not',
-    'know that another refund already exists for the same order.',
+    `${color.mauve}•${color.reset} Coyle’s refund example shows why valid parameter types are not`,
+    '  enough. A proposed second refund can have the expected types and',
+    '  therefore pass Pydantic, while still violating the rule that the',
+    '  same order should not be refunded again.',
+    '',
   ].map((value) => `${color.text}${value}${color.reset}`),
-  4,
+  5,
 );
 
 await sleep(350);
 line();
 await typeLines(
   [
-    'The ontology checks the result against domain relationships',
-    'and rules. It can reject the second refund, providing semantic',
-    'consistency beyond valid data types.',
+    '  The ontology checks the result against domain relationships and rules',
+    '  before the agent changes anything. It therefore adds semantic',
+    '  consistency, not just type validation.',
   ].map((value) => `${color.text}${value}${color.reset}`),
-  4,
+  5,
 );
 
 await sleep(500);
 line();
-line(`${color.green}✓ Answer grounded in video evidence at 18:43 and 19:11.${color.reset}`);
+await typeLines(
+  [
+    '  The Video Context MCP found the validation distinction at 18:14,',
+    '  the supporting slide at 18:43, and the refund example at 19:11.',
+  ].map((value) => `${color.muted}${value}${color.reset}`),
+  5,
+);
 
 // Keep the answer visible through the end of the capture. VHS ends the capture
 // while this process stays alive, so no shell prompt appears.

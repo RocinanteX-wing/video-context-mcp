@@ -17,37 +17,37 @@ The assistant retrieves timestamped video evidence through the Video Context MCP
 <details>
 <summary>Text transcript</summary>
 
-**User:** Using Coyle’s refund example, identify an output from `run_tool()` that could pass Pydantic validation but
-fail the ontology output check. Why can’t Pydantic detect the problem, and what additional guarantee does the ontology
-provide?
+**User:** Use `video-context-mcp` to investigate Coyle’s refund example. What does it reveal about the difference
+between Pydantic checks and ontology checks? Give a concrete answer and cite the relevant speech and on-screen
+timestamps.
 
-**Assistant:** Searching the indexed video for Coyle’s refund example…
-
-```text
-video-context.search_videos
-  video: Sir59K8ZDPU
-  query: "Pydantic ontology refund example"
-
-18:43  “Pydantic in, ontology out”
-19:11  “A second refund on the same order is a problem”
-
-video-context.get_transcript
-  range: 18:43–19:20
-```
-
-**Assistant:** A possible output is:
+**Assistant:** I’ll query the indexed video for Coyle’s refund example and use the matching transcript and slide
+evidence.
 
 ```text
-run_tool() → second refund on the same order
+• Calling video-context.search_videos
+    video: Sir59K8ZDPU
+    query: "Coyle refund Pydantic ontology validation"
+
+  └ 18:14  speech · Check types with Pydantic; results with ontology
+    18:43  screen · “Pydantic in, ontology out”
+    19:11  speech · “A second refund on the same order is a problem”
+
+• Calling video-context.get_transcript
+    range: 17:45–19:20
 ```
 
-This can pass Pydantic if the refund parameters have the expected types. Pydantic validates those types; it does not
-know that another refund already exists for the same order.
+**Assistant:** Coyle’s refund example shows why valid parameter types are not enough. A proposed second refund can have
+the expected types and therefore pass Pydantic, while still violating the rule that the same order should not be
+refunded again.
 
-The ontology checks the result against domain relationships and rules. It can reject the second refund, providing
-semantic consistency beyond valid data types.
+The ontology checks the result against domain relationships and rules before the agent changes anything. It therefore
+adds semantic consistency, not just type validation.
 
-_Answer grounded in video evidence at 18:43 and 19:11. This animation is a deterministic replay, not a live model call._
+The Video Context MCP found the validation distinction at 18:14, the supporting slide at 18:43, and the refund example
+at 19:11.
+
+_This animation is a deterministic replay, not a live model call._
 
 </details>
 

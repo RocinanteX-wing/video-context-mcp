@@ -3,8 +3,8 @@ Output docs/assets/demo.gif
 Require node
 
 Set Shell "zsh"
-Set Width 1200
-Set Height 700
+Set Width 1000
+Set Height 440
 Set FontSize 19
 Set FontFamily "Menlo"
 Set LetterSpacing 0
@@ -27,4 +27,4 @@ Show
 
 # Keep the capture to README length. The replay remains alive so no shell prompt
 # appears before VHS finishes recording.
-Sleep 24s
+Sleep 25s
