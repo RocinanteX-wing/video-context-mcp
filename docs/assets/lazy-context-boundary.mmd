@@ -1,0 +1,18 @@
+flowchart LR
+    subgraph Eager[Context-flooding approach]
+        V1[Video] --> D1[Dump every frame<br/>and transcript into prompt]
+        D1 --> C1[Large, noisy context]
+    end
+
+    subgraph Lazy[video-context-mcp approach]
+        V2[Video] --> I2[Index once]
+        I2 --> O2[Cheap timeline overview]
+        O2 --> Q2[Agent chooses next slice]
+        Q2 --> T2[Transcript range]
+        Q2 --> S2[Search hit]
+        Q2 --> F2[Frame at timestamp]
+        T2 --> C2[Only selected evidence enters context]
+        S2 --> C2
+        F2 --> C2
+    end
+

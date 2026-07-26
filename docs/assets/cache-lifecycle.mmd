@@ -1,0 +1,13 @@
+flowchart LR
+    S[Source media] --> W[Temporary ingest workspace]
+    W --> D[Derived working set]
+    D --> N[Agent saves durable note<br/>outside the MCP cache]
+    N --> X[delete_video]
+    D --> L[LRU maintenance<br/>or prune_cache]
+    X --> G[Released files and vectors]
+    L --> G
+
+    W -. removed after ingest .-> G
+    R[Shared runtimes and models] --> K[Reusable cache artifacts]
+    K -. not automatically evicted .-> R
+

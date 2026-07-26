@@ -1,0 +1,9 @@
+flowchart LR
+    O[run_tool output<br/>refund order=123<br/>amount=25] --> P[Pydantic shape check]
+    P -->|pass| Y{Ontology state check}
+    Y -->|order 123 has no refund| A[Accept: structurally and<br/>semantically valid]
+    Y -->|order 123 already refunded| R[Reject: duplicate refund]
+
+    P -. sees types, fields,<br/>and local constraints .-> Q[Does not know order history<br/>or business relationships]
+    Y -. enforces domain rules<br/>and cardinality .-> G[World-state guarantee]
+

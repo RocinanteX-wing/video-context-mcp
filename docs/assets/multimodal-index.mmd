@@ -1,0 +1,17 @@
+flowchart TB
+    V[Video source<br/>YouTube ID, URL, or local file] --> P[Ingestion pipeline]
+    P --> M[Metadata and chapters]
+    P --> S[Transcript segments]
+    P --> K[Keyframes]
+    K --> O[OCR blocks]
+    S --> F[Full-text index]
+    O --> F
+    S --> E[Dense embeddings]
+    O --> E
+    F --> R[Reciprocal-rank fusion]
+    E --> R
+    R --> H[search_videos hits]
+    K --> G[peek_frame image content]
+    O --> G
+    G --> L[Connected model interprets<br/>the visual evidence]
+

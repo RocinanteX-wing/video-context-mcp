@@ -1,0 +1,13 @@
+flowchart LR
+    Q[Agent question] --> I[ingest_video]
+    I --> S[get_ingest_status]
+    S --> T[get_video_timeline]
+    T --> H[search_videos]
+    H --> K{Evidence kind}
+    K -->|speech| X[get_transcript<br/>targeted range]
+    K -->|screen| F[peek_frame<br/>nearest keyframe]
+    F --> C[crop_region<br/>optional zoom]
+    X --> A[Answer with video_id<br/>and timestamps]
+    C --> A
+    S -. capabilities and warnings .-> H
+

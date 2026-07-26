@@ -1,0 +1,16 @@
+flowchart TB
+    I[Ingest video] --> C[get_ingest_status]
+    C --> T{Transcript available?}
+    T -->|captions| TC[Query caption segments]
+    T -->|no captions + fallback enabled| TW[Query Whisper segments]
+    T -->|not available| TN[Report missing transcript<br/>with remediation]
+
+    C --> V{Visual indexing available?}
+    V -->|yes| VF[Use peek_frame<br/>and crop_region]
+    V -->|no| VN[Text-only capabilities<br/>remain explicit]
+
+    C --> E{Semantic vectors available?}
+    E -->|yes| ES[Hybrid semantic + full-text search]
+    E -->|no| EF[Full-text search remains usable]
+    EF --> R[repair_embeddings<br/>without re-downloading video]
+

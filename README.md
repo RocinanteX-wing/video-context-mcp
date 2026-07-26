@@ -13,6 +13,26 @@ The assistant retrieves timestamped video evidence through the Video Context MCP
 
 ![Terminal demonstration of an LLM using the Video Context MCP to retrieve evidence and explain the difference between Pydantic and ontology validation](docs/assets/demo.gif)
 
+The agent uses the MCP tools to locate and retrieve relevant timestamped
+evidence:
+
+```mermaid
+flowchart LR
+    Q[Agent question] --> I[ingest_video]
+    I --> S[get_ingest_status]
+    S --> T[get_video_timeline]
+    T --> H[search_videos]
+    H --> K{Evidence kind}
+    K -->|speech| X[get_transcript<br/>targeted range]
+    K -->|screen| F[peek_frame<br/>nearest keyframe]
+    F --> C[crop_region<br/>optional zoom]
+    X --> A[Answer with video_id<br/>and timestamps]
+    C --> A
+    S -. capabilities and warnings .-> H
+```
+
+Source: [`agent-evidence-loop.mmd`](docs/assets/agent-evidence-loop.mmd).
+
 ## Requirements
 
 - Node ≥ 22
@@ -111,7 +131,8 @@ cache, and removed with `delete_video`
 or automatic cache eviction.
 
 See [`docs/tool-contract.md`](docs/tool-contract.md) for the public response contract, capability semantics, timestamp
-conventions, and cache lifecycle.
+conventions, and cache lifecycle. The underlying diagrams and their editable
+sources are collected in [`docs/diagrams.md`](docs/diagrams.md).
 
 ## Configuration
 

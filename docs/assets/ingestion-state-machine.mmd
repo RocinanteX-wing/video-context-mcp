@@ -1,0 +1,21 @@
+flowchart LR
+    P[pending] --> U[setup]
+    U --> M[metadata]
+    M --> T[transcript]
+    T --> V{visual enabled?}
+    V -->|yes| R[frames]
+    V -->|no| E{embeddings enabled?}
+    R --> O[ocr]
+    O --> E
+    E -->|yes| B[embed]
+    E -->|no| D[done]
+    B --> D
+    T -. no captions + whisper fallback .-> W[whisper]
+    W --> E
+    B -. semantic failure .-> D
+    P -. unrecoverable failure .-> X[error]
+    M -. unrecoverable failure .-> X
+    T -. unrecoverable failure .-> X
+
+    D[done<br/>with capabilities and warnings]
+
