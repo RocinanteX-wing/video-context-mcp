@@ -1,14 +1,13 @@
 # Project diagrams
 
-These diagrams explain the shipped architecture and operating model of
+These diagrams document the shipped architecture and operating model of
 `video-context-mcp`. The editable Mermaid sources live beside them in
-[`assets/`](assets/); the article can reference this page or reuse the source
-diagrams directly.
+[`assets/`](assets/).
 
 ## Agent evidence loop
 
-Use this to explain how an agent moves from a question to focused,
-timestamped evidence.
+The agent evidence loop moves from a question to focused, timestamped
+evidence.
 
 ```mermaid
 flowchart LR
@@ -29,8 +28,8 @@ Source: [`agent-evidence-loop.mmd`](assets/agent-evidence-loop.mmd)
 
 ## Incremental ingestion
 
-Use this to explain why partially completed ingestion remains useful and how
-optional visual, Whisper, and embedding stages behave.
+Ingestion is incremental, so completed stages can be queried while optional
+visual, Whisper, and embedding stages continue or fail independently.
 
 ```mermaid
 flowchart LR
@@ -59,8 +58,8 @@ Source: [`ingestion-state-machine.mmd`](assets/ingestion-state-machine.mmd)
 
 ## Multimodal index
 
-Use this to show how speech and on-screen evidence become searchable without
-putting a vision model inside the server.
+Speech and on-screen evidence become searchable while visual interpretation
+remains with the connected model rather than inside the server.
 
 ```mermaid
 flowchart TB
@@ -85,8 +84,8 @@ Source: [`multimodal-index.mmd`](assets/multimodal-index.mmd)
 
 ## Lazy context boundary
 
-Use this to explain the project’s central design choice: index once, then
-pull only the evidence the agent needs.
+The server indexes a video once and lets the agent pull only the evidence it
+needs.
 
 ```mermaid
 flowchart LR
@@ -112,8 +111,8 @@ Source: [`lazy-context-boundary.mmd`](assets/lazy-context-boundary.mmd)
 
 ## Capability fallbacks
 
-Use this to explain how status reports what is available instead of treating
-every missing optional capability as a total failure.
+`get_ingest_status` reports the capabilities currently available for each
+video, including transcript, visual, and semantic-search fallbacks.
 
 ```mermaid
 flowchart TB
@@ -137,8 +136,8 @@ Source: [`capability-fallbacks.mmd`](assets/capability-fallbacks.mmd)
 
 ## Cache lifecycle
 
-Use this to explain what is disposable, what is retained, and where durable
-notes belong.
+Source media and temporary workspaces are disposable; derived artifacts remain
+in the working set until the client saves its durable note and releases them.
 
 ```mermaid
 flowchart LR
@@ -159,8 +158,8 @@ Source: [`cache-lifecycle.mmd`](assets/cache-lifecycle.mmd)
 
 ## Pydantic versus ontology validation
 
-Use this example when explaining the difference between local output shape and
-domain consistency.
+This example distinguishes local output shape validation from domain
+consistency validation.
 
 ```mermaid
 flowchart LR
