@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { toToolError } from '../errors.js';
 import { formatMs } from '../utils/time.js';
 import { type Deps, jsonResult } from './shared.js';
@@ -9,6 +10,37 @@ export const description =
   'retained usage. Reports the video LRU budget separately from reusable runtime/model data.';
 
 export const inputSchema = {};
+
+export const outputSchema = {
+  count: z.number().int().nonnegative(),
+  cache_dir: z.string(),
+  cache_gb: z.number().nonnegative(),
+  physical_cache_gb: z.number().nonnegative(),
+  video_cache_gb: z.number().nonnegative(),
+  shared_cache_gb: z.number().nonnegative(),
+  runtime_cache_gb: z.number().nonnegative(),
+  index_cache_gb: z.number().nonnegative(),
+  budget_gb: z.number().nonnegative(),
+  low_water_gb: z.number().nonnegative(),
+  cleanup_pending: z.number().int().nonnegative(),
+  over_budget: z.boolean(),
+  cache_warning: z.string().nullable(),
+  videos: z.array(
+    z.object({
+      video_id: z.string(),
+      title: z.string().nullable(),
+      kind: z.string(),
+      stage: z.string(),
+      duration: z.string().nullable(),
+      segments: z.number().int().nonnegative(),
+      error_code: z.string().nullable(),
+      disk_mb: z.number().nonnegative(),
+      retained_mb: z.number().nonnegative(),
+      last_accessed_at: z.string().nullable(),
+      eviction_eligible: z.boolean(),
+    }),
+  ),
+};
 
 function gb(bytes: number): number {
   return Math.round((bytes / 1024 ** 3) * 100) / 100;

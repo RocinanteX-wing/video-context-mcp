@@ -23,6 +23,7 @@
     "SECURITY.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
+    "docs/tool-contract.md",
     "docs/assets/demo.gif"
   ],
   "scripts": {

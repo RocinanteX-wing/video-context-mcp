@@ -16,6 +16,28 @@ export const inputSchema = {
     .describe('Preview candidates without deleting anything (default true)'),
 };
 
+const cacheVideoSchema = z.object({
+  video_id: z.string(),
+  title: z.string().nullable(),
+  last_accessed_at: z.string().nullable(),
+  retained_mb: z.number().nonnegative(),
+});
+
+export const outputSchema = {
+  dry_run: z.boolean(),
+  budget_gb: z.number().nonnegative(),
+  low_water_gb: z.number().nonnegative(),
+  before_gb: z.number().nonnegative(),
+  after_gb: z.number().nonnegative(),
+  candidate_count: z.number().int().nonnegative(),
+  candidates: z.array(cacheVideoSchema),
+  released_count: z.number().int().nonnegative(),
+  released: z.array(cacheVideoSchema),
+  cleanup_pending: z.number().int().nonnegative(),
+  unresolved_overage_gb: z.number().nonnegative(),
+  next: z.string().nullable(),
+};
+
 function gb(bytes: number): number {
   return Math.round((bytes / 1024 ** 3) * 1000) / 1000;
 }

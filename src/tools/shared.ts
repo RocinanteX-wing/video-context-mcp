@@ -36,8 +36,11 @@ export function textResult(text: string): { content: { type: 'text'; text: strin
   return { content: [{ type: 'text', text }] };
 }
 
-export function jsonResult(obj: unknown): { content: { type: 'text'; text: string }[] } {
-  return textResult(JSON.stringify(obj, null, 1));
+export function jsonResult<T>(obj: T): {
+  content: { type: 'text'; text: string }[];
+  structuredContent: T;
+} {
+  return { ...textResult(JSON.stringify(obj, null, 1)), structuredContent: obj };
 }
 
 export function getVideoRow(db: Database.Database, videoId: string): VideoRow {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { capabilitiesSchema, loadCapabilities, publicSource, sourceSchema } from '../domain.js';
 import { VcmError, toToolError } from '../errors.js';
 import { formatMs } from '../utils/time.js';
 import { type Deps, getVideoRow, ingestStateNote, textResult } from './shared.js';
@@ -17,9 +18,11 @@ export const inputSchema = {
 export const outputSchema = {
   video_id: z.string(),
   title: z.string(),
-  uploader_channel: z.string().nullable(),
-  upload_date: z.string().nullable(),
+  source: sourceSchema,
+  creator: z.string().nullable(),
+  published_at: z.string().nullable(),
   duration_seconds: z.number().nonnegative().nullable(),
+  capabilities: capabilitiesSchema,
   captions: z
     .object({
       language: z.string(),
@@ -155,9 +158,11 @@ export function handler(deps: Deps) {
         structuredContent: {
           video_id: row.id,
           title: row.title,
-          uploader_channel: row.channel,
-          upload_date: row.upload_date,
+          source: publicSource(row),
+          creator: row.channel,
+          published_at: row.upload_date,
           duration_seconds: row.duration_s,
+          capabilities: loadCapabilities(deps.db, row),
           captions: row.captions_lang
             ? { language: row.captions_lang, automatic: Boolean(row.captions_auto) }
             : null,

@@ -56,6 +56,7 @@ describe('MCP server over stdio', () => {
       'repair_embeddings',
       'search_videos',
     ]);
+    expect(tools.every((tool) => tool.outputSchema)).toBe(true);
     const timeline = tools.find((tool) => tool.name === 'get_video_timeline');
     expect(timeline?.outputSchema).toMatchObject({
       type: 'object',

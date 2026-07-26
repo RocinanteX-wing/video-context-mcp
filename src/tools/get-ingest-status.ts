@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { capabilitiesSchema, loadCapabilities, publicSource, sourceSchema } from '../domain.js';
 import { toToolError } from '../errors.js';
 import { type Deps, getVideoRow, jsonResult, segmentCount } from './shared.js';
 
@@ -11,6 +12,23 @@ export const description =
 
 export const inputSchema = {
   video_id: z.string().describe('The video_id returned by ingest_video'),
+};
+
+export const outputSchema = {
+  video_id: z.string(),
+  title: z.string().nullable(),
+  source: sourceSchema,
+  stage: z.string(),
+  progress_pct: z.number().min(0).max(100),
+  progress_detail: z.string().nullable(),
+  running: z.boolean(),
+  capabilities: capabilitiesSchema,
+  captions: z.object({ lang: z.string(), auto: z.boolean() }).nullable(),
+  transcript_source: z.enum(['captions', 'whisper']).nullable(),
+  error: z.object({ code: z.string().nullable(), detail: z.string().nullable() }).nullable(),
+  cache_warning: z.string().nullable(),
+  release_when_done: z.string().nullable(),
+  notes: z.array(z.string()),
 };
 
 export function handler(deps: Deps) {
@@ -92,18 +110,12 @@ export function handler(deps: Deps) {
       return jsonResult({
         video_id: row.id,
         title: row.title,
+        source: publicSource(row),
         stage: row.stage,
         progress_pct: job?.progress_pct ?? 0,
         progress_detail: job?.progress_detail ?? null,
         running: deps.ingest.isRunning(row.id),
-        available: {
-          metadata: row.title !== null,
-          transcript: segments > 0,
-          segments,
-          frames,
-          ocr_blocks: ocrBlocks,
-          vectors: row.embedded_count,
-        },
+        capabilities: loadCapabilities(deps.db, row),
         captions: row.captions_lang
           ? { lang: row.captions_lang, auto: Boolean(row.captions_auto) }
           : null,

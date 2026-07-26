@@ -46,9 +46,9 @@ Small, focused pull requests are easiest to review. Bug reports with redacted
 
 ## Terminal demo
 
-`npm run demo` builds the server and runs a real MCP workflow against the short
-public “Me at the zoo” video. It requires network access and uses an isolated
-temporary cache.
+`npm run demo` builds the server and runs a real agent-style MCP investigation
+against the public “Why Agentic Systems Need Ontologies” talk. It requires
+network access and uses an isolated temporary cache.
 
 The README animation is generated from `docs/demo.tape` with
 [VHS](https://github.com/charmbracelet/vhs):

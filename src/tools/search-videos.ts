@@ -20,6 +20,21 @@ export const inputSchema = {
   limit: z.number().int().positive().max(25).optional().describe('Max fused hits (default 8)'),
 };
 
+export const outputSchema = {
+  query: z.string(),
+  video_id: z.string().nullable(),
+  hits: z.array(
+    z.object({
+      video_id: z.string(),
+      title: z.string().nullable(),
+      timestamp_seconds: z.number().nonnegative(),
+      kind: z.enum(['speech', 'screen']),
+      snippet: z.string(),
+    }),
+  ),
+  semantic_search: z.object({ available: z.boolean(), note: z.string().nullable() }),
+};
+
 interface Hit {
   video_id: string;
   title: string | null;
@@ -116,6 +131,7 @@ export function handler(deps: Deps) {
       // Semantic list — skipped instantly when nothing was ever embedded, and
       // degrades to FTS-only (with a note) if the model/store misbehaves.
       let semanticNote: string | null = null;
+      let semanticAvailable = false;
       try {
         const embed = await import('../pipeline/embed.js');
         if (await embed.hasVectors(deps.config)) {
@@ -139,6 +155,7 @@ export function handler(deps: Deps) {
               },
             })),
           );
+          semanticAvailable = true;
         }
       } catch (err) {
         semanticNote = `Note: semantic search unavailable (${err instanceof Error ? err.message.slice(0, 150) : err}); showing full-text matches only.`;
@@ -146,9 +163,16 @@ export function handler(deps: Deps) {
 
       const fused = rrfFuse(lists, limit);
       if (fused.length === 0) {
-        return textResult(
-          `No matches for "${args.query}"${args.video_id ? ` in ${args.video_id}` : ''}. Only ingested videos are searchable (speech needs captions or whisper, screen text needs visual indexing) — check list_videos.${semanticNote ? `\n${semanticNote}` : ''}`,
-        );
+        const text = `No matches for "${args.query}"${args.video_id ? ` in ${args.video_id}` : ''}. Only ingested videos are searchable (speech needs captions or whisper, screen text needs visual indexing) — check list_videos.${semanticNote ? `\n${semanticNote}` : ''}`;
+        return {
+          ...textResult(text),
+          structuredContent: {
+            query: args.query,
+            video_id: args.video_id ?? null,
+            hits: [],
+            semantic_search: { available: semanticAvailable, note: semanticNote },
+          },
+        };
       }
       for (const videoId of new Set(fused.map((hit) => hit.item.video_id))) {
         deps.cache.touchVideo(videoId);
@@ -158,7 +182,21 @@ export function handler(deps: Deps) {
           `${f.item.video_id} [${formatMs(f.item.ts_ms)}] (${f.item.kind}) ${f.item.title ?? ''} — ${f.item.display}`,
       );
       if (semanticNote) lines.push(semanticNote);
-      return textResult(lines.join('\n'));
+      return {
+        ...textResult(lines.join('\n')),
+        structuredContent: {
+          query: args.query,
+          video_id: args.video_id ?? null,
+          hits: fused.map((f) => ({
+            video_id: f.item.video_id,
+            title: f.item.title,
+            timestamp_seconds: f.item.ts_ms / 1000,
+            kind: f.item.kind,
+            snippet: f.item.display,
+          })),
+          semantic_search: { available: semanticAvailable, note: semanticNote },
+        },
+      };
     } catch (err) {
       return toToolError(err);
     }

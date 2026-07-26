@@ -18,6 +18,14 @@ export const inputSchema = {
     .describe('Rebuild even when the video already records healthy embeddings'),
 };
 
+export const outputSchema = {
+  video_id: z.string(),
+  stage: z.string(),
+  cached: z.boolean(),
+  already_running: z.boolean(),
+  next: z.string(),
+};
+
 export function handler(deps: Deps) {
   return async (args: { video_id: string; force?: boolean }) => {
     try {

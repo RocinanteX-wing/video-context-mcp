@@ -34,6 +34,14 @@ export const inputSchema = {
     .describe('Embed transcript+screen text for semantic search_videos matching (default true)'),
 };
 
+export const outputSchema = {
+  video_id: z.string(),
+  stage: z.string(),
+  cached: z.boolean(),
+  already_running: z.boolean(),
+  next: z.string(),
+};
+
 export function handler(deps: Deps) {
   return async (args: {
     url_or_path: string;

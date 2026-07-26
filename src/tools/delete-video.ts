@@ -13,6 +13,13 @@ export const inputSchema = {
   video_id: z.string().describe('The video_id to remove from the index'),
 };
 
+export const outputSchema = {
+  deleted: z.string(),
+  title: z.string().nullable(),
+  cleanup_pending: z.boolean(),
+  already_released: z.boolean(),
+};
+
 export function handler(deps: Deps) {
   return async (args: { video_id: string }) => {
     try {

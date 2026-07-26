@@ -33,6 +33,15 @@ export const inputSchema = {
     .describe('[x0, y0, x1, y1] normalized to the frame (0,0 = top-left)'),
 };
 
+export const outputSchema = {
+  video_id: z.string(),
+  requested_timestamp_seconds: z.number().nonnegative(),
+  frame_timestamp_seconds: z.number().nonnegative(),
+  bbox: z.array(z.number()).length(4),
+  class: z.string().nullable(),
+  ocr: z.array(z.object({ text: z.string(), conf: z.number() })),
+};
+
 let tmpCounter = 0;
 
 function intersects(
@@ -85,7 +94,17 @@ export function handler(deps: Deps) {
           : ['', 'No OCR text inside this region — read the image directly.']),
         ...(note ? ['', note] : []),
       ];
-      return { content: [imageContent(base64), { type: 'text' as const, text: lines.join('\n') }] };
+      return {
+        content: [imageContent(base64), { type: 'text' as const, text: lines.join('\n') }],
+        structuredContent: {
+          video_id: row.id,
+          requested_timestamp_seconds: tsMs / 1000,
+          frame_timestamp_seconds: frame.ts_ms / 1000,
+          bbox: [x0, y0, x1, y1],
+          class: frame.class,
+          ocr: inRegion.map((block) => ({ text: block.text, conf: block.conf })),
+        },
+      };
     } catch (err) {
       return toToolError(err);
     }

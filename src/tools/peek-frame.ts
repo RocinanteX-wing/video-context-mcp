@@ -30,6 +30,22 @@ export const inputSchema = {
   return_image: z.boolean().optional().describe('Include the frame image (default true)'),
 };
 
+const ocrBlockSchema = z.object({
+  text: z.string(),
+  bbox: z.array(z.number()).length(4),
+  conf: z.number(),
+});
+
+export const outputSchema = {
+  video_id: z.string(),
+  requested_timestamp_seconds: z.number().nonnegative(),
+  frame_timestamp_seconds: z.number().nonnegative(),
+  class: z.string().nullable(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  ocr: z.array(ocrBlockSchema),
+};
+
 const PEEK_WIDTH = 1024;
 const NEAR_TOLERANCE_MS = 15_000;
 let tmpCounter = 0;
@@ -79,7 +95,18 @@ export function handler(deps: Deps) {
         }
       }
       content.push({ type: 'text', text: lines.join('\n') });
-      return { content };
+      return {
+        content,
+        structuredContent: {
+          video_id: row.id,
+          requested_timestamp_seconds: tsMs / 1000,
+          frame_timestamp_seconds: frame.ts_ms / 1000,
+          class: frame.class,
+          width: frame.width,
+          height: frame.height,
+          ocr: blocks,
+        },
+      };
     } catch (err) {
       return toToolError(err);
     }
